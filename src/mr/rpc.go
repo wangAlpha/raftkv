@@ -24,33 +24,6 @@ type RPCArgs struct {
 type RPCReply struct {
 }
 
-// func (p *RpcService) startServer() {
-
-// 	rpc.RegisterName("RpcService", new(RpcService))
-
-// 	listener, err := net.Listen("tcp", ":1234")
-// 	if err != nil {
-// 		log.Fatal("ListenTCP error:", err)
-// 	}
-
-// 	conn, err := listener.Accept()
-// 	if err != nil {
-// 		log.Fatal("Accept error:", err)
-// 	}
-// 	msg := make(chan string)
-// 	go schedule(conn, msg)
-// }
-
-// func schedule(t string) {
-// 	if t == "master" {
-// 		//
-// 		for {
-// 			//
-// 		}
-// 	} else {
-// 	}
-// }
-
 func WorkerId() string {
 	return "1"
 }

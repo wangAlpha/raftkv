@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"fmt"
 	"log"
 	"net"
 	"net/rpc"
@@ -70,10 +69,10 @@ loop:
 		checkError(err)
 		select {
 		case <-m.shutdown:
-			fmt.Println("Master received shutdown command!")
+			log.Println("Master received shutdown command!")
 			break loop
 		default:
-			fmt.Println("rpc.ServeConn")
+			log.Println("rpc.ServeConn")
 			go rpc.ServeConn(conn)
 		}
 	}
@@ -96,12 +95,19 @@ func (m *Master) Done() bool {
 // 	return true
 // }
 func (m *Master) ReportTasks(args RPCArgs, reply *RPCReply) error {
-	fmt.Println("Report task status", m.phase)
-	fmt.Println(m.phase)
+	log.Println("Report task status", m.phase)
+	log.Println(m.phase)
 	// if m.phase == InReduce {
 	// 	fmt.Println("InReduce phase")
 	// } else if {}
 	// return "working"
+	return nil
+}
+
+func (m *Master) RegisterWorker(args RPCArgs, reply *RPCReply) error {
+	log.Println("Register worker")
+	// TODO
+	// Register worker's name and status.
 	return nil
 }
 

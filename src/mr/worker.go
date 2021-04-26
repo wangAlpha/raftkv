@@ -36,7 +36,7 @@ func (wk *Worker) register() {
 	sockname := masterSock()
 	var args RPCArgs
 	var reply RPCReply
-	call(sockname, &args, &reply)
+	call("Master.Register", &args, &reply)
 }
 
 //
@@ -44,6 +44,7 @@ func (wk *Worker) register() {
 //
 func RunWorker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
+	log.Println("RunWorker...")
 	worker := Worker{}
 	worker.reducef = reducef
 	worker.mapf = mapf
