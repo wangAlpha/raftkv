@@ -5,12 +5,17 @@ import (
 	"hash/fnv"
 	"log"
 	"net/rpc"
+	"sync"
+	"time"
 )
 
+// Worker definition
 type Worker struct {
-	name    string
-	mapf    func(string, string) []KeyValue
-	reducef func(string, []string) string
+	mutex    sync.Mutex
+	id       int
+	shutdown chan bool
+	mapf     func(string, string) []KeyValue
+	reducef  func(string, []string) string
 }
 
 //
@@ -31,12 +36,79 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-func (wk *Worker) register() {
+func (wk *Worker) Register() {
 	log.Println("Worker register")
-	sockname := masterSock()
 	var args RPCArgs
 	var reply RPCReply
 	call("Master.Register", &args, &reply)
+	// Print worker id and status
+}
+
+// Request task
+func (wk *Worker) RequestTask() {
+	args := RPCArgs{}
+	reply := RPCReply{}
+	call("Master.AssignTask", args, &reply)
+}
+
+// 3. Request tasks
+// 4. Finsh tasks
+func (wk *Worker) Run() {
+	for {
+		// Request tasks
+		// Wait Master shutdown throught request structure
+	}
+}
+
+// Send heartbreak signal to master every 2s.
+func (wk *Worker) HeartBreak() {
+	timeoutchan := make(chan bool)
+	args := RPCArgs{}
+	reply := RPCReply{}
+	// TODO Add some worker status information to args.
+loop:
+	for {
+		go func() {
+			<-time.After(2 * time.Second)
+			timeoutchan <- true
+		}()
+
+		select {
+		case <-timeoutchan:
+			go call("Master.HeartBreak", args, &reply)
+		case <-wk.shutdown:
+			log.Println("Work id %d recevce shutdown signal", wk.id)
+			break loop
+		}
+	}
+}
+
+func main() {
+	timeoutchan := make(chan bool)
+
+	go func() {
+		<-time.After(2 * time.Second)
+		timeoutchan <- true
+	}()
+
+	select {
+	case <-timeoutchan:
+		break
+	case <-time.After(10 * time.Second):
+		break
+	}
+
+	fmt.Println("Hello, playground")
+}
+
+func MakeWorker(mapf func(string, string) []KeyValue,
+	reducef func(string, []string) string) *Worker {
+	worker := new(Worker)
+
+	worker.reducef = reducef
+	worker.mapf = mapf
+
+	return worker
 }
 
 //
@@ -45,59 +117,13 @@ func (wk *Worker) register() {
 func RunWorker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	log.Println("RunWorker...")
-	worker := Worker{}
-	worker.reducef = reducef
-	worker.mapf = mapf
-	worker.name = "worker1"
-
-	worker.register()
-
-	// Make many workers
-	// Register work to master
-	//
+	worker := MakeWorker(mapf, reducef)
+	worker.Register()   // Register worker
+	worker.HeartBreak() // Start send heartbreak to worker
+	worker.Run()
 	// Sort file and send sorted file to the master.
-	// Your worker implementation here.
-
-	// TODO
-	// uncomment to send the Example RPC to the master.
-	// CallExample()
+	log.Println("Run Worker is close")
 }
-
-//
-// example function to show how to make an RPC call to the master.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-// func CallExample() {
-
-// 	// declare an argument structure.
-// 	// args := ExampleArgs{}
-
-// 	// // fill in the argument(s).
-// 	// args.X = 99
-
-// 	// // declare a reply structure.
-// 	// reply := ExampleReply{}
-
-// 	// send the RPC request, wait for the reply.
-// 	// call("Master.Example", &args, &reply)
-
-// 	// reply.Y should be 100.
-// 	// fmt.Printf("reply.Y %v\n", reply.Y)
-// }
-
-// Call dial service
-// func DialService(network, address string) (*ServiceWorker, error) {
-// 	c, err := rpc.Dial(network, address)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return &ServiceWorker{Client: c}, nil
-// }
-
-//  func (p *HelloServiceClient) Hello(request string, reply *string) error {
-// 	return p.Client.Call(HelloServiceName+".Hello", request, reply)
-// }
 
 //
 // send an RPC request to the master, wait for the response.
@@ -118,6 +144,6 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 		return true
 	}
 
-	fmt.Println(err)
+	log.Println(err)
 	return false
 }

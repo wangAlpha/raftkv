@@ -1,39 +1,28 @@
 package mr
 
-//
-// RPC definitions.
-//
-// remember to capitalize all names.
-//
-
 import (
+	"log"
 	"os"
 	"strconv"
 )
 
-// Add your RPC definitions here.
+// RPC Args message definition
 type RPCArgs struct {
 	Phrase  int
+	name    string
 	OutPath []string
 }
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
+// RPC reply message definition
 type RPCReply struct {
 }
 
-func WorkerId() string {
-	return "1"
+func checkError(err error) {
+	if err != nil {
+		log.Fatal(err)
+		os.Exit(1)
+	}
 }
-
-// func workerSocker() string {
-
-// 	// s := "/var/tmp/824-mr-"
-
-// 	return s
-// }
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the master.
