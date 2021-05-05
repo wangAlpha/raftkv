@@ -6,15 +6,48 @@ import (
 	"strconv"
 )
 
+type TaskPhase int
+
+// type WorkState int
+
+const Ok = 200
+
+// Worker state type.
+const (
+	Idle = iota
+	InProcess
+	InCompleted
+)
+
+// Master state type.
+const (
+	InitPhase = iota
+	MapPhase
+	ReducePhase
+	OverPhase
+)
+
+// Work state definitions here.
+type WorkerState struct {
+	id          int
+	heartbreaks int
+	task_state  TaskPhase
+}
+
 // RPC Args message definition
 type RPCArgs struct {
-	Phrase  int
-	name    string
+	id      int
+	state   TaskPhase
 	OutPath []string
 }
 
 // RPC reply message definition
 type RPCReply struct {
+	id           int
+	worker_state WorkerState
+	taskf        interface{}
+	return_code  int
+	files        []string
 }
 
 func checkError(err error) {
