@@ -111,6 +111,7 @@ func (m *Master) AssignTask(args RPCArgs, reply *RPCReply) error {
 		M := len(m.files) / nWorker // 每个worker的文件数
 		log.Printf("nWorker: %d, M: %d", nWorker, M)
 		j := 0
+		k := args.Id
 		for i := 0; i < len(m.files); i += M {
 			j += M
 			if j > len(m.files) {
@@ -121,6 +122,10 @@ func (m *Master) AssignTask(args RPCArgs, reply *RPCReply) error {
 				break
 			} else {
 				reply.Files = m.files[i:j]
+			}
+			k--
+			if k <= 0 {
+				break
 			}
 		}
 		reply.Taskf = "mapf"
@@ -177,14 +182,13 @@ func (m *Master) WorkDone(args RPCArgs, reply *RPCReply) error {
 	}
 	if all_done {
 		log.Printf("All %d task is done", m.phase)
-		// All task is done, and next task state
-		state := <-m.workstate
-		m.workstate <- state + 1
-		
-	} else {
 		for _, worker := range m.workers {
-			log.Printf("%+v", worker.TaskState)
+			if worker.TaskState == InCompleted {
+				worker.TaskState = Idle
+			}
 		}
+		// All task is done, and next task state
+		m.phase++
 	}
 	return nil
 }
@@ -195,23 +199,11 @@ func (m *Master) Schedule() {
 	log.Println("Master start schedule")
 
 	go m.UpdateWorker() // Wait for worker .HeartBreaks loop
-	time.Sleep(time.Millisecond * 100)
-loop:
+
 	for {
-		select {
-		case state, ok := <-m.workstate:
-			// Shutdown until all worker is shutdown
-			if ok && state == OverPhase {
-				break loop
-			} else {
-				for _, worker := range m.workers {
-					if worker.TaskState != InCompleted {
-						worker.TaskState = Idle
-					}
-				}
-			}
-		default:
-			break loop
+		time.Sleep(time.Millisecond * 100)
+		if m.phase == OverPhase {
+			break
 		}
 	}
 }
