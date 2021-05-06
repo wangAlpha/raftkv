@@ -2,6 +2,7 @@ package mr
 
 import (
 	"log"
+	"net/rpc"
 	"os"
 	"strconv"
 )
@@ -21,36 +22,35 @@ const (
 
 // Master state type.
 const (
-	InitPhase = iota
-	MapPhase
+	MapPhase = iota
 	ReducePhase
 	OverPhase
 )
 
 // Work state definitions here.
 type WorkerState struct {
-	id          int
-	heartbreaks int
-	task_state  TaskPhase
+	Id          int
+	HeartBreaks int
+	TaskState   TaskPhase
 }
 
 // RPC Args message definition
 type RPCArgs struct {
-	id      int
-	state   TaskPhase
+	Id      int
+	State   TaskPhase // Idle, InCompleted
 	OutPath []string
 }
 
 // RPC reply message definition
 type RPCReply struct {
-	id           int
-	worker_state WorkerState
-	taskf        interface{}
-	return_code  int
-	files        []string
+	Id          int
+	Taskf       string
+	ReturnCode  int
+	WorkerState WorkerState
+	Files       []string
 }
 
-func checkError(err error) {
+func checkError(err error, msg string) {
 	if err != nil {
 		log.Fatal(err)
 		os.Exit(1)
@@ -65,4 +65,27 @@ func masterSock() string {
 	s := "/var/tmp/824-mr-"
 	s += strconv.Itoa(os.Getuid())
 	return s
+}
+
+//
+// Send an RPC request to the master, wait for the response.
+// usually returns true.
+// returns false if something goes wrong.
+//
+func call(rpcname string, args interface{}, reply interface{}) bool {
+	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
+	sockname := masterSock()
+	c, err := rpc.DialHTTP("unix", sockname)
+	if err != nil {
+		log.Fatal("dialing:", err)
+	}
+	defer c.Close()
+
+	err = c.Call(rpcname, args, reply)
+	if err == nil {
+		return true
+	}
+
+	log.Println(err)
+	return false
 }

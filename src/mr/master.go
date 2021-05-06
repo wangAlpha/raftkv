@@ -3,6 +3,7 @@ package mr
 import (
 	"log"
 	"net"
+	"net/http"
 	"net/rpc"
 	"os"
 	"sync"
@@ -54,21 +55,22 @@ func (m *Master) server() {
 
 	os.Remove(m.sockname)
 	listener, err := net.Listen("unix", m.sockname)
-	checkError(err)
+	checkError(err, "Failed to build a master listener.")
+	go http.Serve(listener, nil)
 
-loop:
-	for {
-		conn, err := listener.Accept()
-		checkError(err)
-		select {
-		case <-m.shutdown:
-			log.Println("Master received shutdown command!")
-			break loop
-		default:
-			log.Println("rpc.ServeConn")
-			go rpc.ServeConn(conn)
-		}
-	}
+	// loop:
+	// 	for {
+	// 		conn, err := listener.Accept()
+	// 		checkError(err, "Failed to accept a connection.")
+	// 		select {
+	// 		case <-m.shutdown:
+	// 			log.Println("Master received shutdown command!")
+	// 			break loop
+	// 		default:
+	// 			log.Println("rpc.ServeConn")
+	// 			go rpc.ServeConn(conn)
+	// 		}
+	// 	}
 }
 
 //
@@ -80,43 +82,60 @@ func (m *Master) Done() bool {
 }
 
 // Register worker, and assign id to worker.
-func (m *Master) RegisterWorker(args RPCArgs, reply *RPCReply) error {
+func (m *Master) Register(args *RPCArgs, reply *RPCReply) error {
 	log.Println("Register worker")
 
 	state := new(WorkerState)
-	m.work_id += 1
-	state.id = m.work_id
+	m.work_id++
 	m.workers[m.work_id] = state
+	reply.Id = m.work_id
 
-	reply.return_code = Ok
+	reply.ReturnCode = Ok
 	return nil
 }
 
-func (m *Master) Heartbreak(args RPCArgs, reply *RPCReply) error {
-	log.Printf("Recevice worker %v heartbreak\n", args.id)
-	m.workers[args.id].heartbreaks--
-	reply.return_code = Ok
+func (m *Master) HeartBreak(args RPCArgs, reply *RPCReply) error {
+	log.Printf("Recevice worker %v heartbreak\n", args.Id)
+	if m.workers[args.Id].HeartBreaks > 0 {
+		m.workers[args.Id].HeartBreaks--
+	}
+	reply.ReturnCode = Ok
 	return nil
 }
 
 func (m *Master) AssignTask(args RPCArgs, reply *RPCReply) error {
-	// id := string(args.id)
-	// number := ihash(id) % m.nMap
+	log.Printf("AssignTask work id=%d, phase=%d\n", args.Id, m.phase)
+
 	if m.phase == MapPhase {
-		files := m.files
-		reply.files = files
-		reply.taskf = "mapf"
+		nWorker := len(m.workers)
+		M := len(m.files) / nWorker // 每个worker的文件数
+		log.Printf("nWorker: %d, M: %d", nWorker, M)
+		j := 0
+		for i := 0; i < len(m.files); i += M {
+			j += M
+			if j > len(m.files) {
+				j = len(m.files)
+			}
+			if i+2*M > len(m.files) {
+				reply.Files = m.files[i:]
+				break
+			} else {
+				reply.Files = m.files[i:j]
+			}
+		}
+		reply.Taskf = "mapf"
 	} else if m.phase == ReducePhase {
-		files := m.files
-		reply.files = files
-		reply.taskf = "reducef"
+		// files := m.files
+		// reply.Files = files
+		reply.Taskf = "reducef"
 	} else if m.phase == OverPhase {
-		reply.taskf = "shutdown"
+		reply.Taskf = "shutdown"
 	}
-	reply.return_code = Ok
+	reply.ReturnCode = Ok
 	return nil
 }
 
+// Wait for heartbreak of worker
 func (m *Master) UpdateWorker() {
 	timeoutchan := make(chan bool)
 loop:
@@ -128,12 +147,15 @@ loop:
 
 		select {
 		case <-timeoutchan:
+			m.Lock()
+			defer m.Unlock()
 			for _, worker := range m.workers {
-				worker.heartbreaks += 1
-				if worker.heartbreaks >= 5 {
-					log.Printf("Worker %v heartbreak is stop!\n", worker.id)
+				worker.HeartBreaks += 1
+				if worker.HeartBreaks >= 5 {
+					log.Printf("Worker %v heartbreak is stop!\n", worker.Id)
 				}
 			}
+
 		case <-m.shutdown:
 			break loop
 		}
@@ -142,73 +164,82 @@ loop:
 
 func (m *Master) WorkDone(args RPCArgs, reply *RPCReply) error {
 	log.Println("Worker is done!")
-	m.workers[m.work_id].task_state = InCompleted
-	done := true
+	// m.Lock()
+	// defer m.Unlock()
+
+	m.workers[args.Id].TaskState = InCompleted
+	all_done := true
 	for _, worker := range m.workers {
-		if worker.task_state != InCompleted {
-			done = false // 任务没有完成
+		if worker.TaskState != InCompleted {
+			all_done = false // 任务没有完成
 			break
 		}
 	}
-	if done {
-		// All task is done, and next task
+	if all_done {
+		log.Printf("All %d task is done", m.phase)
+		// All task is done, and next task state
 		state := <-m.workstate
 		m.workstate <- state + 1
+		
+	} else {
+		for _, worker := range m.workers {
+			log.Printf("%+v", worker.TaskState)
+		}
 	}
 	return nil
 }
 
-// Wait for a heartbreaks every 5s.
+// Wait for a .HeartBreaks every 5s.
 // Wait for task assign request
 func (m *Master) Schedule() {
 	log.Println("Master start schedule")
 
-	go m.UpdateWorker() // Wait for worker heartbreaks loop
-	m.phase = InitPhase
+	go m.UpdateWorker() // Wait for worker .HeartBreaks loop
 	time.Sleep(time.Millisecond * 100)
 loop:
 	for {
 		select {
 		case state, ok := <-m.workstate:
+			// Shutdown until all worker is shutdown
 			if ok && state == OverPhase {
 				break loop
 			} else {
 				for _, worker := range m.workers {
-					if worker.task_state != InCompleted {
-						worker.task_state = InitPhase
+					if worker.TaskState != InCompleted {
+						worker.TaskState = Idle
 					}
 				}
 			}
+		default:
+			break loop
 		}
 	}
 }
 
 // Clean up intermediate files.
-func (m *Master) CleanupFiles() error {
-	return nil
+func (m *Master) CleanupFiles() {
 }
 
 // Send shutdown signal to workers
-func (m *Master) Shutdown() error {
+func (m *Master) Shutdown() {
 	m.CleanupFiles()
-
-	return nil
 }
 
 // Sort all intermediate files
-func Sort() error {
-	return nil
+func Sort() {
 }
 
-func NewMaster(files []string) *Master {
+func NewMaster(files []string, nReduce int) *Master {
 	master := new(Master)
 
 	master.name = "master"
 	master.sockname = masterSock()
+	master.workers = make(map[int]*WorkerState)
 	master.files = files
+	master.nReduce = nReduce
 	master.rpc_conn = nil
 	master.shutdown = make(chan bool)
-
+	master.phase = MapPhase
 	return master
 }
 
@@ -218,9 +249,9 @@ func NewMaster(files []string) *Master {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeMaster(files []string, nReduce int) *Master {
-	log.Println("MakeMaster")
+	log.Printf("MakeMaster, nReduce = %d", nReduce)
 	// Create a rpc service and run it.
-	m := NewMaster(files)
+	m := NewMaster(files, nReduce)
 	m.server()                  // Lauch a RPC stub
 	time.Sleep(1 * time.Second) // Wait worker register
 	m.Schedule()                // Start map phase schedule

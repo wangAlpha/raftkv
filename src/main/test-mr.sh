@@ -1,5 +1,6 @@
 #!/bin/sh
 
+set -x
 #
 # basic map-reduce test
 #
@@ -7,7 +8,7 @@
 RACE=
 
 # uncomment this to run the tests with the Go race detector.
-#RACE=-race
+# RACE=-race
 
 # run the test in a fresh sub-directory.
 rm -rf mr-tmp

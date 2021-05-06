@@ -1,18 +1,22 @@
 package mr
 
 import (
+	"encoding/json"
+	"fmt"
 	"hash/fnv"
 	"log"
-	"net/rpc"
+	"os"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // Worker definition
 type Worker struct {
 	mutex      sync.Mutex
 	id         int
-	state      TaskPhase
+	status     TaskPhase // Execution status
 	shutdown   bool
 	final_chan chan bool
 	taskType   string
@@ -40,44 +44,49 @@ func ihash(key string) int {
 
 func (wk *Worker) Register() {
 	log.Println("Worker register")
-	var args RPCArgs
-	var reply RPCReply
-	call("Master.Register", args, &reply)
-	log.Printf("Worker id: %v, state: %v\n", reply.id, reply.state)
+	args := RPCArgs{}
+	reply := RPCReply{}
+	call("Master.Register", &args, &reply)
+	log.Printf("%+v", reply)
+	wk.id = reply.Id
+
+	log.Printf("Worker id: %v, state: %v\n", reply.Id, reply.WorkerState.TaskState)
 }
 
 // Request task
-func (wk *Worker) RequestTask() {
+func (wk *Worker) RequestTask() []string {
+	log.Println("Request a task")
 	args := RPCArgs{}
 	reply := RPCReply{}
 	call("Master.AssignTask", args, &reply)
 	// TODO Get request tasks
-	log.Printf("return code: %t\n", reply.return_code == Ok)
+	wk.taskType = reply.Taskf
+	if reply.Taskf == "shutdown" {
+		wk.shutdown = true
+	}
+	log.Printf("return code: %t\n", reply.ReturnCode == Ok)
+	return reply.Files
 }
 
-func (wk *Worker) UpdateStatus() {
-	log.Printf("Update worker %v status\n", wk.id)
-	args := RPCArgs{}
-	reply := RPCReply{}
-	call("Master.UpdateWorkerState", args, &reply)
-	// Update worker status
+func (wk *Worker) ExecuteTask(files []string) {
+	log.Printf("Worker %d execute %s task.\n", wk.id, wk.taskType)
+	if wk.taskType == "mapf" {
+		time.Sleep(time.Second * 1)
+	} else if wk.taskType == "reducef" {
+		time.Sleep(time.Second * 1)
+	}
+	log.Printf("files: %+v", files)
 }
 
-func (wk *Worker) ExecuteTask() {
-	// if
-	// 判断是mapF还是reduceF任务
-	// 执行
-}
-
+// Return work id and output file
 func (wk *Worker) Done() {
-
 	args := RPCArgs{}
 	reply := RPCReply{}
-	args.id = wk.id
-	args.state = wk.state
+
+	args.Id = wk.id
+	args.State = InCompleted
 	// 更新任务数据结构
-	count_state := 0
-	call("Master.DoneWork", args, &reply)
+	call("Master.WorkDone", args, &reply)
 }
 
 // 3. Request tasks
@@ -86,14 +95,15 @@ func (wk *Worker) Run() {
 	log.Printf("Worker %d is runing\n", wk.id)
 	for {
 		// Request asynchronous tasks
-		wk.RequestTask() // 请求的啥任务
-		if wk.shutdown {
+		files := wk.RequestTask() // 请求的啥任务
+		if !wk.shutdown {
+			wk.ExecuteTask(files)
+			wk.Done() // Send a done signal to master
+		} else {
 			break
 		}
 		// 得到任务执行
 		// 假如不是任务是shutdown，则发送关机命令
-		wk.ExecuteTask()
-		wk.Done() // Send a done signal to master
 	}
 }
 
@@ -112,10 +122,11 @@ loop:
 			go func() {
 				args := RPCArgs{}
 				reply := RPCReply{}
+				args.Id = wk.id
 				call("Master.HeartBreak", args, &reply)
 				// Register worker if worker is crashed.
-				if reply.return_code != Ok {
-					call("Master.RegisterWorker", args, &reply)
+				if reply.ReturnCode != Ok {
+					call("Master.Register", args, &reply)
 				}
 			}()
 		case <-wk.final_chan:
@@ -129,6 +140,7 @@ func MakeWorker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) *Worker {
 	worker := new(Worker)
 
+	worker.id = 1
 	worker.reducef = reducef
 	worker.mapf = mapf
 
@@ -139,7 +151,9 @@ func (wk *Worker) Shutdown() {
 	// wk.CleanupFiles()
 	args := RPCArgs{}
 	reply := RPCReply{}
+	args.Id = wk.id
 	call("Master.FinalAck", args, &reply)
+	wk.final_chan <- true
 }
 
 //
@@ -149,6 +163,7 @@ func RunWorker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	log.Println("RunWorker...")
 	worker := MakeWorker(mapf, reducef)
+
 	worker.Register()      // Register worker
 	go worker.HeartBreak() // Start send heartbreak to worker
 	worker.Run()
@@ -157,25 +172,49 @@ func RunWorker(mapf func(string, string) []KeyValue,
 	log.Println("Run Worker is close")
 }
 
-//
-// Send an RPC request to the master, wait for the response.
-// usually returns true.
-// returns false if something goes wrong.
-//
-func call(rpcname string, args interface{}, reply interface{}) bool {
-	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
-	sockname := masterSock()
-	c, err := rpc.DialHTTP("unix", sockname)
-	if err != nil {
-		log.Fatal("dialing:", err)
-	}
-	defer c.Close()
+func doMap(jobName string,
+	mapTask int,
+	inFile string,
+	nReduce int,
+	mapF func(filename string, contents string)) {
 
-	err = c.Call(rpcname, args, reply)
-	if err == nil {
-		return true
+	file, err := os.Open(inFile)
+	checkError(err, fmt.Sprintf("Failed to open input file %s.", inFile))
+	info, err := file.Stat()
+	checkError(err, "Failed to get input file info.")
+	contents := make([]byte, info.Size())
+	file.Read(contents)
+	file.Close()
+
+	mappedResult := Map(inFile, string(contents))
+
+	encoders := make([]*json.Encoder, nReduce)
+	for i := range encoders {
+		// filename := "mr-tmp-map-" + strconv.Itoa(ihash(kv.Key)%s.NReduce+1)
+		filename := "mr-tmp-map" + jobName + string(mapTask) + string(i)
+		// filename := reduceName(jobName, mapTask, i)
+		file, err := os.Create(filename)
+		checkError(err, "Failed to create intermediate file.")
+		defer file.Close()
+		encoders[i] = json.NewEncoder(file)
 	}
 
-	log.Println(err)
-	return false
+	for _, kv := range mappedResult {
+		idx := ihash(kv.Key) % nReduce
+		err := encoders[idx].Encode(&kv)
+		checkError(err, "Failed to encode key-value pair.")
+	}
+}
+
+func Map(filename string, contents string) []KeyValue {
+	ff := func(r rune) bool { return !unicode.IsLetter(r) }
+
+	words := strings.FieldsFunc(contents, ff)
+
+	kva := []KeyValue{}
+	for _, w := range words {
+		kv := KeyValue{w, "1"}
+		kva = append(kva, kv)
+	}
+	return kva
 }
