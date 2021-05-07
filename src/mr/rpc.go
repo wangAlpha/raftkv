@@ -22,7 +22,8 @@ const (
 
 // Master state type.
 const (
-	MapPhase = iota
+	InitPhase = -1
+	MapPhase  = iota
 	ReducePhase
 	OverPhase
 )
@@ -36,18 +37,19 @@ type WorkerState struct {
 
 // RPC Args message definition
 type RPCArgs struct {
-	Id      int
+	Id      int32
 	State   TaskPhase // Idle, InCompleted
 	OutPath []string
 }
 
 // RPC reply message definition
 type RPCReply struct {
-	Id          int
+	Id          int32
 	Taskf       string
 	ReturnCode  int
 	WorkerState WorkerState
 	Files       []string
+	NReduce     int
 }
 
 func checkError(err error, msg string) {
