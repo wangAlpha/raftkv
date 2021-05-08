@@ -30,7 +30,7 @@ const (
 
 // Work state definitions here.
 type WorkerState struct {
-	Id          int
+	// Id          int
 	HeartBreaks int
 	TaskState   TaskPhase
 }
@@ -38,6 +38,7 @@ type WorkerState struct {
 // RPC Args message definition
 type RPCArgs struct {
 	Id      int32
+	Phase   int
 	State   TaskPhase // Idle, InCompleted
 	OutPath []string
 }

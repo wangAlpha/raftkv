@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io/ioutil"
 	"log"
 	"os"
 	"strconv"
@@ -36,6 +37,10 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+type KeyValues struct {
+	Key   string
+	Value []string
+}
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -61,36 +66,33 @@ func (wk *Worker) Register() {
 
 // Request task
 func (wk *Worker) RequestTask() []string {
-	log.Println("Request a task")
+	log.Printf("Worker id:%d Request a task", wk.id)
 	args := RPCArgs{}
 	reply := RPCReply{}
 	args.Id = wk.id
 	call("Master.AssignTask", args, &reply)
-	// TODO Get request tasks
 	wk.taskType = reply.Taskf
-	if reply.Taskf == "shutdown" {
-		wk.shutdown = true
-	}
+	wk.shutdown = (reply.Taskf == "Shutdown")
 	log.Printf("Worker id:%v, taskf:%s, files:%s", wk.id, wk.taskType, reply.Files)
-	log.Printf("return code: %t\n", reply.ReturnCode == Ok)
 	return reply.Files
 }
 
-func (wk *Worker) ExecuteTask(files []string) []string {
+func (wk *Worker) DoTask(files []string) []string {
 	log.Printf("Worker %d execute %s task.\n", wk.id, wk.taskType)
 	outFiles := []string{}
-	if wk.taskType == "mapf" {
+	if wk.taskType == "Mapf" {
 		wk.map_files = append(wk.map_files, files...)
+		nFile := len(wk.map_files)
 		for _, file := range files {
-			outFile := doMap(wk.id, file, wk.nReduce)
+			outFile := DoMap(wk.id, file, wk.nReduce, nFile)
 			outFiles = append(outFiles, outFile...)
 		}
-	} else if wk.taskType == "reducef" {
+	} else if wk.taskType == "Reducef" {
 		wk.reduce_files = append(wk.reduce_files, files...)
-		outFile := doReduce(files, wk.id)
-		if len(outFile) != 0 {
-			outFiles = append(outFiles, outFile)
-		}
+		outFile := DoReduce(files, wk.id)
+		outFiles = append(outFiles, outFile)
+	} else if wk.taskType == "Wait" {
+		time.Sleep(75 * time.Millisecond)
 	}
 	return outFiles
 }
@@ -102,6 +104,11 @@ func (wk *Worker) Done(inFiles []string) {
 
 	wk.status = InCompleted
 	args.Id = wk.id
+	if wk.taskType == "Mapf" {
+		args.Phase = MapPhase
+	} else if wk.taskType == "Reducef" {
+		args.Phase = ReducePhase
+	}
 	args.State = InCompleted
 	args.OutPath = inFiles
 	// 更新任务数据结构
@@ -116,7 +123,7 @@ func (wk *Worker) Run() {
 		// Request asynchronous tasks
 		files := wk.RequestTask() // 请求的啥任务
 		if !wk.shutdown {
-			outFiles := wk.ExecuteTask(files)
+			outFiles := wk.DoTask(files)
 			wk.Done(outFiles) // Send a done signal to master
 			log.Printf("Worker %d, len: %d, outFiles %v", wk.id, len(outFiles), outFiles)
 		} else {
@@ -155,14 +162,15 @@ loop:
 }
 
 func (wk *Worker) CleanupFiles() {
-	for _, f := range wk.map_files {
-		os.Remove(f)
-	}
-	for _, f := range wk.reduce_files {
-		os.Remove(f)
-	}
+	// for _, f := range wk.map_files {
+	// 	os.Remove(f)
+	// }
+	// for _, f := range wk.reduce_files {
+	// 	os.Remove(f)
+	// }
 	wk.map_files = wk.map_files[:0]
 	wk.reduce_files = wk.reduce_files[:0]
+	wk.final_chan <- true
 }
 
 func MakeWorker(mapf func(string, string) []KeyValue,
@@ -199,17 +207,17 @@ func RunWorker(mapf func(string, string) []KeyValue,
 	worker.Run()
 	worker.Shutdown()
 	// Sort file and send sorted file to the master.
-	log.Println("Run Worker is close")
+	log.Printf("Run Worker %d is close", worker.id)
 }
 
 // Map to nReduce intermediate files
-func doMap(workId int32, inFile string, nReduce int) []string {
+func DoMap(workId int32, inFile string, nReduce int, nFile int) []string {
 	file, err := os.Open(inFile)
 	checkError(err, fmt.Sprintf("Failed to open input file %s", inFile))
-	info, err := file.Stat()
-	checkError(err, "Failed to read file info.")
-	contents := make([]byte, info.Size())
-	file.Read(contents)
+	contents, err := ioutil.ReadAll(file)
+	checkError(err, "Failed to file contens.")
+	// contents := make([]byte, info.Size())
+	// file.Read(contents)
 	file.Close()
 
 	mapResult := Map(inFile, string(contents))
@@ -217,10 +225,10 @@ func doMap(workId int32, inFile string, nReduce int) []string {
 
 	files := make([]string, nReduce)
 	for i := range encoders {
-		filename := fmt.Sprintf("mr-map-out-%d-%d", workId, i)
+		filename := fmt.Sprintf("mr-map-out-%d-%d-%d", workId, nFile, i)
 		ff, err := os.Create(filename)
 		checkError(err, "Failed to create a intermeditate file.")
-		files = append(files, filename)
+		files[i] = filename
 		defer ff.Close()
 		encoders[i] = json.NewEncoder(ff)
 	}
@@ -246,11 +254,8 @@ func Map(filename string, contents string) []KeyValue {
 	return kva
 }
 
-// doReduce, input a set of KV, output a count file
-func doReduce(inFiles []string, workId int32) string {
-	if len(inFiles) == 0 {
-		return ""
-	}
+// DoReduce, input a set of KV, output a count file
+func DoReduce(inFiles []string, workId int32) string {
 	keyValues := make(map[string][]string)
 	log.Printf("Worker ID:%d, inFiles: %v, len: %d", workId, inFiles, len(inFiles))
 	for _, file := range inFiles {
@@ -266,13 +271,17 @@ func doReduce(inFiles []string, workId int32) string {
 		}
 	}
 
-	filename := fmt.Sprintf("mr-out-%d", workId)
+	filename := fmt.Sprintf("mr-reduce-out-%d", workId)
 	ff, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	checkError(err, "Failed to open a append file.")
-
+	defer ff.Close()
 	for k, list := range keyValues {
-		ff.WriteString(fmt.Sprintf("%s %s\n", k, Reduce(k, list)))
+		ff.WriteString(fmt.Sprintf("%s %d\n", k, len(list)))
 	}
+	// encoder := json.NewEncoder(ff)
+	// err = encoder.Encode(&keyValues)
+	// checkError(err, "Failed to encoder keyValue file.")
+
 	return filename
 }
 

@@ -13,7 +13,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode"
 )
 
 // 1. Make new master
@@ -82,33 +81,45 @@ func (m *Master) HeartBreak(args RPCArgs, reply *RPCReply) error {
 	if m.workers[args.Id].HeartBreaks > 0 {
 		m.workers[args.Id].HeartBreaks--
 	}
-	reply.ReturnCode = Ok
 	return nil
 }
 
 func (m *Master) AssignTask(args RPCArgs, reply *RPCReply) error {
 	log.Printf("AssignTask work id=%d, phase=%d\n", args.Id, m.phase)
 	m.mu1.Lock()
+	defer m.mu1.Unlock()
+
 	if m.phase == MapPhase {
-		last := len(m.map_files) - 1
-		reply.Taskf = "mapf"
-		reply.Files = append(reply.Files, m.map_files[last])
-		m.map_files = m.map_files[:last]
+		if len(m.map_files) != 0 {
+			last := len(m.map_files) - 1
+			reply.Taskf = "Mapf"
+			reply.Files = append(reply.Files, m.map_files[last])
+			m.map_files = m.map_files[:last]
+			m.workers[args.Id].TaskState = InProcess
+		} else {
+			reply.Taskf = "Wait"
+			reply.Files = []string{}
+		}
 	} else if m.phase == ReducePhase {
-		last := len(m.reduce_files) - 1
-		reply.Taskf = "reducef"
-		reply.Files = append(reply.Files, m.reduce_files[last])
-		m.reduce_files = m.reduce_files[:last]
+		if len(m.reduce_files) != 0 {
+			last := len(m.reduce_files) - 1
+			reply.Taskf = "Reducef"
+			reply.Files = append(reply.Files, m.reduce_files[last])
+			m.reduce_files = m.reduce_files[:last]
+			m.workers[args.Id].TaskState = InProcess
+		} else {
+			reply.Taskf = "Wait"
+			reply.Files = []string{}
+		}
 	} else if m.phase == OverPhase {
-		reply.Taskf = "shutdown"
+		reply.Taskf = "Shutdown"
+		reply.Files = []string{}
 	}
-	reply.ReturnCode = Ok
-	m.mu1.Unlock()
 	return nil
 }
 
 // Wait for heartbreak of worker
-func (m *Master) UpdateWorker() {
+func (m *Master) MonitorWorker() {
 	timeoutchan := make(chan bool)
 loop:
 	for {
@@ -119,10 +130,10 @@ loop:
 
 		select {
 		case <-timeoutchan:
-			for _, worker := range m.workers {
-				worker.HeartBreaks += 1
-				if worker.HeartBreaks >= 5 {
-					log.Printf("Worker id:%v heartbreak is stop!\n", worker.Id)
+			for id, status := range m.workers {
+				status.HeartBreaks += 1
+				if status.HeartBreaks >= 5 {
+					log.Printf("Worker id:%v heartbreak is stop!\n", id)
 				}
 			}
 
@@ -133,36 +144,39 @@ loop:
 }
 
 func (m *Master) WorkDone(args RPCArgs, reply *RPCReply) error {
-	log.Printf("Worker Id:%d is done!", args.Id)
+	log.Printf("Worker Id:%d is done, State: %d", args.Id, args.Phase)
 	m.mu.Lock()
+	defer m.mu.Unlock()
 
+	m.workers[args.Id].TaskState = InCompleted
+
+	all_done := func(files []string) bool {
+		for _, w := range m.workers {
+			if w.TaskState != InCompleted {
+				return false
+			}
+		}
+		return true && len(files) == 0
+	}
+	phase_done := false
 	if m.phase == MapPhase {
 		m.reduce_files = append(m.reduce_files, args.OutPath...)
+		phase_done = all_done(m.map_files)
 	} else if m.phase == ReducePhase {
 		m.sort_files = append(m.sort_files, args.OutPath...)
+		phase_done = all_done(m.reduce_files)
 	}
-	m.workers[args.Id].TaskState = InCompleted
-	all_done := true
-	for _, worker := range m.workers {
-		if worker.TaskState != InCompleted {
-			all_done = false
-			break
-		}
-	}
-	// Whether all task are distributed
-	distributed_over := (m.phase == MapPhase && len(m.map_files) == 0) || (m.phase == ReducePhase && len(m.reduce_files) == 0)
 
-	if all_done && distributed_over {
+	if phase_done {
 		log.Printf("All %d task is done", m.phase)
-		for _, worker := range m.workers {
-			if worker.TaskState == InCompleted {
-				worker.TaskState = Idle
+		for _, w := range m.workers {
+			if w.TaskState == InCompleted {
+				w.TaskState = Idle
 			}
 		}
 		// All task is done, and transit next task state
 		m.phase++
 	}
-	m.mu.Unlock()
 	return nil
 }
 
@@ -171,7 +185,7 @@ func (m *Master) WorkDone(args RPCArgs, reply *RPCReply) error {
 func (m *Master) Schedule() {
 	log.Println("Master start schedule")
 
-	go m.UpdateWorker() // Wait for worker .HeartBreaks loop
+	go m.MonitorWorker() // Wait for worker .HeartBreaks loop
 
 	for {
 		// Wait for worker register
@@ -189,7 +203,6 @@ func (m *Master) Schedule() {
 //
 // main/mrmaster.go calls Done() periodically to find out
 // if the entire job has finished.
-//
 func (m *Master) Done() bool {
 	return m.phase == OverPhase
 }
@@ -201,26 +214,41 @@ func (m *Master) Shutdown() {
 
 // Sort all intermediate files
 func (m *Master) Sort() {
-	kv := make(map[string]int)
-	ff := func(r rune) bool { return !unicode.IsSpace(r) }
-	for _, file := range m.sort_files {
-		file, err := os.Open(file)
+	keyValue := make(map[string]int)
+	log.Printf("final files %d, %+v", len(m.sort_files), m.sort_files)
+	inFiles := make(map[string]bool)
+	for _, f := range m.sort_files {
+		inFiles[f] = true
+	}
+	for file := range inFiles {
+		ff, err := os.Open(file)
 		checkError(err, "Failed to open file.")
-		defer file.Close()
-		scanner := bufio.NewScanner(file)
+		defer ff.Close()
+		scanner := bufio.NewScanner(ff)
 		for scanner.Scan() {
 			line := scanner.Text()
-			words := strings.FieldsFunc(line, ff)
+			words := strings.Fields(line)
+			if len(words) != 2 {
+				log.Println(words)
+				break
+			}
 			count, _ := strconv.Atoi(words[1])
-			kv[words[0]] = kv[words[0]] + count
+			keyValue[words[0]] = keyValue[words[0]] + count
 		}
+		// ioutil
+		// decoder := json.NewDecoder(ff)
+		// kv := KeyValues{}
+		// for decoder.More() {
+		// 	err := decoder.Decode(&kv)
+		// 	checkError(err, "Failed to decoder kv.")
+		// 	keyValues[kv.Key] = append(keyValues[kv.Key], kv.Value...)
+		// }
 	}
-
-	file, err := os.Open("mr-sorted")
-	checkError(err, "Failed to open files.")
-	defer file.Close()
-	for k, v := range kv {
-		file.WriteString(fmt.Sprintf("%s %d\n", k, v))
+	ff, err := os.Create("mr-out")
+	checkError(err, "Failed to create final file.")
+	defer ff.Close()
+	for k, c := range keyValue {
+		ff.WriteString(fmt.Sprintf("%s %d\n", k, c))
 	}
 }
 
@@ -249,8 +277,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m := NewMaster(files, nReduce)
 	m.server()   // Lauch a RPC stub
 	m.Schedule() // Start map phase schedule
-	// Sort all files
-	m.Sort()
+	m.Sort()     // Sort final files
 	m.Shutdown() // Master and workers shutdown
 	return m
 }

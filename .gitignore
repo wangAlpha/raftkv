@@ -17,8 +17,11 @@ src/main/logFile.log
 src/main/mrmaster
 src/main/mrsequential
 src/main/mrworker
-src/main/mr-tmp/mr-correct-crash.txt
-src/main/mr-tmp/mr-correct-indexer.txt
-src/main/mr-tmp/mr-correct-wc.txt
-src/main/mr-tmp/mr-indexer-all
-src/main/tmp/mr-correct-wc.txt
+src/main/mr-tmp/*
+src/logFile.log
+pkg/*
+bin/*
+src/main/
+src/main/mrmaster
+src/main/mrsequential
+src/main/mrworker
