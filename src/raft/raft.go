@@ -20,6 +20,7 @@ package raft
 import (
 	"log"
 	"math/rand"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,14 +30,24 @@ import (
 
 // import "bytes"
 // import "../labgob"
-type StateMachine = int32
 
+type StateMachine int32
 const (
-	StateCandidate = 0
-	StateFollower = 1
-	StateLeader = 2
+	StateFollower = iota
+	StateCandidate
+	StateLeader
 )
 
+var StateString = map[int]string {
+	StateLeader: "Leader",
+	StateCandidate: "Candidate",
+	StateFollower: "Follower",
+}
+
+
+//file, err := os.OpenFile("logs.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+var INFO = log.New(os.Stderr,"INFO:", os.O_APPEND|os.O_CREATE|os.O_WRONLY)
+var ERR = log.New(os.Stderr,"ERR:", os.O_APPEND|os.O_CREATE|os.O_WRONLY)
 //
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -69,7 +80,7 @@ type Raft struct {
 	mu        sync.Mutex          // Lock to protect shared access to this peer's state
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted state
-	me        int32               // this peer's index into peers[]
+	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
 	msg       chan ApplyMsg
 
@@ -78,15 +89,13 @@ type Raft struct {
 	commitIndex []int32
 	lastApplied int32
 
-	// voted    int32 // whether voted
-	// votedFor map[int32]int32
-	votedFor int32 // voted for client
-	state    int32
-	leaderId int32 // current lead id
+	votedFor int // voted for client
+	state    int
+	leaderId int // current lead id
 
-	chanState 		chan bool
 	chanVoteGranted chan bool
 	chanWinElect 	chan bool
+	chanHeartbeat   chan bool
 }
 
 // return currentTerm and whether this server
@@ -160,18 +169,18 @@ type RequestVoteReply struct {
 	VoteGranted bool  // whether candidate received vote
 }
 
-type VotedResultArgs struct {
-	Asked    bool
-	VotedFor map[int32]int32
-}
+//type VotedResultArgs struct {
+//	Asked    bool
+//	VotedFor map[int32]int32
+//}
 
-type VotedResultReply struct {
-	State    StateMachine
-	LeaderId int32
-	VotedFor map[int32]int32
-}
+//type VotedResultReply struct {
+//	LeaderId int32
+//	VotedFor map[int32]int32
+//}
 
 type LogEntryArgs struct {
+	LeaderId         int
 	Term             int32
 	LastAppliedIndex int32
 	CommitIndex      int32
@@ -180,7 +189,7 @@ type LogEntryArgs struct {
 
 type LogEntryReply struct {
 	Term        int32
-	lastApplied int32
+	LastApplied int32
 	CommitIndex int32
 }
 
@@ -188,16 +197,18 @@ type LogEntryReply struct {
 // example RequestVote RPC handler.
 // TODO:Your code here (2A, 2B).
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	log.Printf("SERVER:%d, RequestVote", rf.me)
+	INFO.Printf("SERVER:%d, RequestVote", rf.me)
 	if args.Term > rf.currentTerm && args.LastLogIndex >= rf.lastApplied {
 		// 如果是Leader或者Candidate都会变成 Follower
-		if rf.voted != 1 {
-			atomic.StoreInt32(&rf.voted, 1)
-			rf.votedFor[args.CandidatedId] += 1
-			reply.VoteGranted = true
-		} else {
-			log.Printf("SERVER: %d, voted for %v", rf.me, rf.votedFor)
-		}
+		//if rf.voted != 1 {
+		//	atomic.StoreInt32(&rf.voted, 1)
+		//	rf.votedFor[args.CandidatedId] += 1
+		//	reply.VoteGranted = true
+		//} else {
+		//	log.Printf("SERVER: %d, voted for %v", rf.me, rf.votedFor)
+		//}
+		reply.VoteGranted = true
+		rf.chanVoteGranted <- true
 	} else {
 		// 不符合投票条件
 		reply.VoteGranted = false
@@ -237,38 +248,47 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 // the struct itself.
 //
 // TODO: current need to change to last term
-func (rf *Raft) sendRequestVote() {
-	log.Printf("SERVER: %d sendRequestVote", rf.me)
+func (rf *Raft) BroadcastRequestVote() {
+	INFO.Printf("BROADCAST request vote, SERVER: %d sendRequestVote", rf.me)
 
-	args := RequestVoteArgs{rf.currentTerm, rf.me, rf.lastApplied, rf.currentTerm}
-	votedResult := make(map[int32]int32)
-	for i, peer := range rf.peers {
-		if int32(i) != rf.me {
+	args := RequestVoteArgs{rf.currentTerm, int32(rf.me), rf.lastApplied, rf.currentTerm}
+	votedResult := make(map[int]int)
+	votedResult[rf.me] = 1
+	for id, peer := range rf.peers {
+		if id != rf.me {
 			reply := RequestVoteReply{}
-			peer.Call("Raft.RequestVote", &args, &reply)
-			// if err {
-			// 	log.Fatalf("RequestVote fail")
-			// }
+			ok := peer.Call("Raft.RequestVote", &args, &reply)
+			if !ok {
+				ERR.Fatalf("Raft.RequestVote occur errr, SERVER: %d", id)
+			}
 			if reply.VoteGranted {
-				votedResult[int32(i)] += 1
-
+				votedResult[id] += 1
 			}
 		}
 	}
-
-	rf.votedFor = votedResult
+	majority := len(rf.peers) / 2 + 1
+	vote := len(votedResult)
+	if len(rf.peers) % 2 == 0 && vote == majority {
+		INFO.Printf("ELECT FAIL, the appear the same number of votes, vote: %d", vote)
+	} else if vote >= majority {
+		rf.leaderId = rf.me
+		rf.chanWinElect <- true
+	}
+	INFO.Printf("BROADCAST request vote result, SERVER:%d, Result: %d, %v", rf.me, rf.leaderId, votedResult)
 }
 
-func (rf *Raft) AppendEntries(args *RequestVoteArgs, reply *RequestVoteReply) error {
-	log.Printf("SERVER:%d, AppendEntries", args.Term)
-
+func (rf *Raft) AppendEntries(args *LogEntryArgs, reply *LogEntryReply) {
+	INFO.Printf("SERVER:%d, AppendEntries, State: %s", rf.me, StateString[rf.me])
+	//INFO.Printf("")
+	rf.leaderId = args.LeaderId
 	if args.Term == -1 {
-		rf.lastTime = time.Now()
+		//rf.lastTime = time.Now()
 	} else {
 		// TODO: append entries
 		// Update log entries
 	}
-	return nil
+	rf.chanHeartbeat <- true
+	INFO.Printf("有跑到这里吗！！%d, State: %s", rf.me, StateString[rf.me])
 }
 
 //
@@ -318,138 +338,108 @@ func (rf *Raft) killed() bool {
 
 // Ask each server information include state and voted,
 // and send voted result
-func (rf *Raft) broadcastElectResult() int32 {
-	log.Printf("SERVER: %d, state: %d, broadcastElectResult: %v", rf.me, rf.state, rf.votedFor)
-
-	// 1. Ask the voted result.
-	peerState := map[int32]StateMachine{}
-	votedResult := rf.votedFor
-
-	args := VotedResultArgs{}
-	args.Asked = false
-	args.VotedFor = rf.votedFor
-
-	for i, peer := range rf.peers {
-		if int32(i) != rf.me {
-			reply := VotedResultReply{}
-			peer.Call("Raft.BroadcastResult", &args, &reply)
-
-			for k, v := range reply.VotedFor {
-				votedResult[k] += v
-				peerState[k] = reply.State
-			}
-		}
-	}
-	// 2. Broadcast the voted result to each server.
-	log.Printf("SERVER:%d, Broadcast result: %v", rf.me, votedResult)
-	args.Asked = true
-	args.VotedFor = votedResult
-	reply := VotedResultReply{}
-	for i, peer := range rf.peers {
-		// Only boardcast
-		if i != int(rf.me) && peerState[int32(i)] == StateCandidate {
-			peer.Call("Raft.BroadcastResult", &args, &reply)
-		}
-	}
-	var leaderId int32 = -1
-	var voted int32 = -1
-	for i, v := range votedResult {
-		if v > voted {
-			leaderId = i
-			voted = v
-		}
-	}
-	return leaderId
-}
+//func (rf *Raft) broadcastElectResult() int32 {
+//	log.Printf("SERVER: %d, state: %d, broadcastElectResult: %v", rf.me, rf.state, rf.votedFor)
+//
+//	// 1. Ask the voted result.
+//	//peerState := map[int32]StateMachine{}
+//	votedResult := rf.votedFor
+//
+//	args := VotedResultArgs{}
+//	args.Asked = false
+//	//args.VotedFor = rf.votedFor
+//
+//	for id, peer := range rf.peers {
+//		if id != rf.me {
+//			reply := VotedResultReply{}
+//			peer.Call("Raft.BroadcastResult", &args, &reply)
+//
+//			//for k, v := range reply.VotedFor {
+//			//	//votedResult[k] += v
+//			//	//peerState[k] = reply.State
+//			//}
+//		}
+//	}
+//	// 2. Broadcast the voted result to each server.
+//	log.Printf("SERVER:%d, Broadcast result: %v", rf.me, votedResult)
+//	args.Asked = true
+//	//args.VotedFor = votedResult
+//	//reply := VotedResultReply{}
+//	//for id, peer := range rf.peers {
+//	//	// Only boardcast
+//	//	//if i != int(rf.me) && peerState[int32(i)] == StateCandidate {
+//	//	//	peer.Call("Raft.BroadcastResult", &args, &reply)
+//	//	//}
+//	//}
+//	//var leaderId int32 = -1
+//	//var voted int32 = -1
+//	//for i, v := range votedResult {
+//	//	if v > voted {
+//	//		leaderId = i
+//	//		voted = v
+//	//	}
+//	//}
+//	return leaderId
+//}
 
 // Asked by other servers.
-func (rf *Raft) BroadcastResult(args *VotedResultArgs, reply *VotedResultReply) {
-	if !args.Asked {
-		// reply.State = rf.me
-		reply.VotedFor = rf.votedFor
-	} else {
-		if reply.LeaderId != -1 {
-			atomic.StoreInt32(&rf.leaderId, reply.LeaderId)
-		}
-		log.Printf("BroadcastResult: %d", reply.LeaderId)
-	}
-	// return nil
-}
+//func (rf *Raft) BroadcastResult(args *VotedResultArgs, reply *VotedResultReply) {
+//	if !args.Asked {
+//		// reply.State = rf.me
+//		//reply.VotedFor = rf.votedFor
+//	} else {
+//		//if reply.LeaderId != -1 {
+//		//	//atomic.StoreInt32(&rf.leaderId, reply.LeaderId)
+//		//}
+//		//log.Printf("BroadcastResult: %d", reply.LeaderId)
+//	}
+//	// return nil
+//}
 
 // periodically send heartbreak to Followers.
 func (rf *Raft) BroadcastHeartbeats() {
-	log.Printf("SERVER: %d, BroadcastHeartbeats", rf.me)
-	for id, peer := range rf.peers {
+	INFO.Printf("SERVER: %d, BroadcastHeartbeats", rf.me)
+	for id := range rf.peers {
+		args := LogEntryArgs{}
+		args.LeaderId = rf.me
+		reply := LogEntryReply{}
 		if id == rf.me && rf.state == StateLeader {
+			//
 			// Save snapshot to disk
+			// Leaders:
+			//  - 选举成功：发送 initial empty AppendEntries RPCs(heartbeat)给其他服务器
+			//  - 收到client的command: append entry，之后发送entry给 state machine
+			//  - if last log index >= nextIndex for a followrr: 发送AppendEntries RPC给server
+			//    - 成功后: follower更新 nextIndex和matchIndex
+			//    - 失败后: 自降nextIndex、重试
+			//  -当前任期的log.term == currentTerm，set commitIndex = N
 		} else {
-			// TODO:
-			args := LogEntryArgs{}
-			rf.sendAppendEntries(args, &LogEntryReply{})
-			// rf.AppendEntries(args, reply)
+			ok := rf.peers[id].Call("Raft.AppendEntries", &args, &reply)
+			if !ok {
+				ERR.Fatalf("REQUEST VOTE, SERVER:%d", rf.me)
+			}
 		}
 	}
-	// for {
-	// 	time.Sleep(time.Millisecond * 100)
-	// 	// go func() {
-	// 	// 	args := RequestVoteArgs{}
-	// 	// 	// reply := RequestVoteReply{}
-	// 	// 	rf.peers[rf.me].Call("Raft.AppendEntries", &args, &RequestVoteArgs{})
-	// 	// }()
-	// 	if rf.state != StateLeader {
-	// 		log.Printf("SERVER: %d, is change to %d\n", rf.me, rf.state)
-	// 		break
-	// 	}
-	// }
 }
 
-// reset timer
-func (rf *Raft) resetTimer() {
-	rf.lastTime = time.Now()
-}
 
-func (rf *Raft) resetVote() {
-	atomic.StoreInt32(&rf.voted, 0)
-	rf.votedFor = map[int32]int32{}
-}
-
-// monitor leader live
-func (rf *Raft) monitorLive(stateChan chan StateMachine) {
-	log.Printf("SERVER: %d, monitorLive", rf.me)
-	for {
-		timeout := rand.Intn(50) + 150 // ms
-		time.Sleep(time.Millisecond * time.Duration(timeout))
-		if rf.state == StateFollower {
-
-			elapsed := time.Now().Sub(rf.lastTime)
-			if elapsed.Milliseconds() > 100*time.Millisecond.Microseconds() && rf.voted != -1 {
-				stateChan <- StateCandidate // 转变为候选人
-				return
+func (rf *Raft) applyMsg() {
+	log.Printf("SERVER: %d, applyMsg", rf.me)
+	for msg := range rf.msg {
+		if rf.state == StateLeader {
+			if msg.CommandValid {
+				entry := LogEntry{rf.currentTerm, msg.CommandIndex, msg.Command}
+				rf.log = append(rf.log, entry)
+				rf.lastApplied = int32(msg.CommandIndex)
+				go rf.sendAppendEntries()
+			} else {
+				ERR.Fatalf("SERVER:%d recevide a invalid command: %v", rf.me, msg)
 			}
 		} else {
+			INFO.Printf("SERVER:%d, State is not Leader, %d", rf.me, rf.state)
 			return
-			// break
 		}
 	}
-}
-
-// func (rf *Raft) applyMsg() {
-// 	log.Printf("SERVER: %d, applyMsg", rf.me)
-// 	for msg := range rf.msg {
-// 		if rf.state == StateLeader {
-// 			if msg.CommandValid {
-// 				entry := LogEntry{rf.currentTerm, msg.CommandIndex, msg.Command}
-// 				rf.log = append(rf.log, entry)
-// 				rf.lastApplied = int32(msg.CommandIndex)
-// 				go rf.sendAppendEntries()
-// 			} else {
-// 				log.Fatalf("ERR: SERVER:%d recevide a invalid command: %v", rf.me, msg)
-// 			}
-// 		} else {
-// 			log.Printf("SERVER:%d, State is not Leader, %d", rf.me, rf.state)
-// 			return
-// 		}
-// 	}
 }
 
 func (rf *Raft) sendAppendEntries() {
@@ -474,53 +464,42 @@ func (rf *Raft) sendAppendEntries() {
 }
 
 func (rf *Raft) Run() {
-	log.Printf("SERVER:%d is running", rf.me)
-	stateChan := make(chan StateMachine)
-	defer close(stateChan)
+	INFO.Printf("SERVER:%d is running", rf.me)
 
 	for {
 		switch rf.state {
-		// Leaders:
-		//  - 选举成功：发送 initial empty AppendEntries RPCs(heartbeat)给其他服务器
-		//  - 收到client的command: append entry，之后发送entry给 state machine
-		//  - if last log index >= nextIndex for a followrr: 发送AppendEntries RPC给server
-		//    - 成功后: follower更新 nextIndex和matchIndex
-		//    - 失败后: 自降nextIndex、重试
-		//  -当前任期的log.term == currentTerm，set commitIndex = N
-		// if rf.state == StateLeader {
 		case StateFollower:
 			select {
 			case <-rf.chanVoteGranted:
-			case <-rf.chanState:
-			case <-time.After(time.Millisecond * rand.Int31n(300) + 200):
+			case <-rf.chanHeartbeat:
+			case <-time.After(time.Millisecond * time.Duration(rand.Intn(200) + 200)):
 				rf.state = StateCandidate
-				// rf.persist()
+				//rf.persist()
+				INFO.Printf("State change, SERVER:%d become Follower to Candidate", rf.me)
 			}
 		case StateLeader:
 			go rf.BroadcastHeartbeats()
-			time.Sleep(time.Millisecond * time.Duration * 100)
+			time.Sleep(time.Millisecond * 100)
 		case StateCandidate:
+			term := rf.currentTerm
+			rf.leaderId = -1
+			rf.currentTerm += 1
+			rf.votedFor = rf.me
+			rf.BroadcastRequestVote()
+			//rf.BroadcastHeartbeats()
+
 			select {
 			case <-rf.chanWinElect:
-				rf.state = StateFollower
+				rf.state = StateLeader
+				INFO.Printf("ELECT Result, %d", rf.me)
 			case <-rf.chanHeartbeat:
-			case <-time.After(time.Millisecond * rand.Int31n(300) + 200):
+				rf.state = StateFollower
+				INFO.Printf("SELECT OVER, Server: %d, State: %s", rf.me, StateString[rf.state])
+			case <-time.After(time.Millisecond * time.Duration(rand.Intn(300) + 200)):
+				rf.currentTerm = term // Recover term
+				INFO.Printf("SELECT OVERTIME, SERVER: %d, State: %s", rf.me, StateString[rf.state])
 			}
 		}
-	}
-		// 	rf.resetVote()
-		// 	go func(s StateMachine, stateChan chan StateMachine) {
-		// 		stateChan <- s
-		// 	}(rf.state, stateChan)
-		// 	select {
-		// 	case <-stateChan:
-		// 	}
-		// 	// case <-rf.dead:
-		// 	if rf.dead == 1 {
-		// 		log.Printf("SERVER: %d, Recevice Kill signal", rf.me)
-		// 		return
-		// 	}
-		// }
 	}
 }
 
@@ -541,36 +520,25 @@ func (rf *Raft) Run() {
 // channel: Raft to send ApplyMsg messages
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
-	log.Println("Raft start initialize.")
+	INFO.Printf("Raft start initialize.")
 
 	rf := &Raft{}
 	rf.peers = peers
 	rf.persister = persister
-	rf.me = int32(me)
+	rf.me = me
 	rf.state = StateFollower
 	rf.msg = applyCh
 
 	rf.currentTerm = 0
 	rf.lastApplied = -1
 	rf.leaderId = -1
-	// rf.lastTime = time.Now()
-	// rf.state = StateCandidate
-	rf.votedFor = make(map[int32]int32)
+	rf.votedFor = -1
 
-	rf.chanState = make(chan bool, 64)
 	rf.chanWinElect = make(chan bool, 64)
 	rf.chanVoteGranted = make(chan bool, 64)
+	rf.chanHeartbeat = make(chan bool, 64)
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	go rf.Run()
 	return rf
 }
-
-// Make()
-// Create a new Raft server
-// 领导是否存在
-// 随机时间开始成为candidate
-// 请求投票 & 重新投票
-// 选出新的Leader
-// 新的Leader开启后台hearbreaks
-// Leader执行所有的Command

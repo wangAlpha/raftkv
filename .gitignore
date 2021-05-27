@@ -13,7 +13,6 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
-src/main/logFile.log
 src/main/mrmaster
 src/main/mrsequential
 src/main/mrworker
@@ -25,3 +24,4 @@ src/main/
 src/main/mrmaster
 src/main/mrsequential
 src/main/mrworker
+*.log
