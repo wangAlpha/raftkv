@@ -63,6 +63,8 @@ var ncpu_once sync.Once
 
 // make a test config, make N server,
 func make_config(t *testing.T, n int, unreliable bool) *config {
+	log.Printf("make config")
+	defer log.Printf("make config done!")
 	ncpu_once.Do(func() {
 		if runtime.NumCPU() < 2 {
 			fmt.Printf("warning: only one CPU, which may conceal locking bugs\n")
@@ -139,6 +141,8 @@ func (cfg *config) crash1(i int) {
 // this server. since we cannot really kill it.
 //
 func (cfg *config) start1(i int) {
+	log.Printf("test start a server")
+	defer log.Printf("test start a server done!")
 	cfg.crash1(i)
 
 	// a fresh set of outgoing ClientEnd names.
