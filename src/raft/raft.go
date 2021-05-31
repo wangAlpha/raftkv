@@ -70,7 +70,8 @@ type ApplyMsg struct {
 type LogEntry struct {
 	Term    int
 	Index   int
-	Command interface{}
+	Command ApplyMsg
+	// Command interface{}
 }
 
 //
@@ -84,7 +85,7 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
-	applyMsgs chan ApplyMsg
+	chanMsg   chan ApplyMsg
 
 	currentTerm int
 	log         []LogEntry
@@ -244,7 +245,6 @@ func (rf *Raft) BroadcastRequestVote() {
 			go rf.SendRequestVote(peer, args)
 		}
 	}
-
 }
 
 func (rf *Raft) SendRequestVote(peer int, args *RequestVoteArgs) {
@@ -354,11 +354,92 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	index := rf.commitIndex
+	index := rf.BuildMsg(command).CommandIndex
 	term := rf.currentTerm
 	isLeader := (rf.me == rf.leaderId)
 
 	return index, term, isLeader
+}
+
+func (rf *Raft) BuildMsg(command interface{}) ApplyMsg {
+	if len(rf.log) > 0 {
+		rf.lastApplied = rf.log[len(rf.log)-1].Index
+	}
+	msg := ApplyMsg{}
+	msg.CommandValid = true
+	msg.Command = command
+	msg.CommandIndex = rf.lastApplied
+	rf.lastApplied++
+
+	logEntry := LogEntry{rf.currentTerm, msg.CommandIndex, msg}
+	rf.log = append(rf.log, logEntry)
+
+	go rf.PublishMsg(false)
+
+	return msg
+}
+
+func (rf *Raft) PublishMsg(heartbeat bool) {
+	INFO.Printf("ApplyState,Server: %d, leader: %d", rf.me, rf.leaderId)
+
+	commitMsg := false
+	if rf.state != StateLeader {
+		WARN.Printf("AppState Fail, Server:%d is not leader, %s", rf.me, StateString[rf.state])
+		return
+	}
+
+	args := &LogEntryArgs{}
+	args.Term = rf.currentTerm
+	args.LeaderId = rf.me
+
+	args.LeaderCommit = rf.commitIndex
+	if args.LeaderCommit > rf.lastApplied {
+		args.LeaderCommit = rf.lastApplied
+	}
+
+	for peer := range rf.peers {
+
+		nextIndex := rf.nextIndex[rf.me] - 1
+		if nextIndex < 0{
+			nextIndex = 0
+		}
+		args.PrevLogIndex = rf.log[nextIndex].Index
+		args.PrevLogTerm = rf.LastLogTerm()
+
+		reply := &LogEntryReply{}
+		if peer == rf.me && rf.state == StateLeader {
+			// TODO: To persistence self data
+		} else {
+			if nextIndex-1 <= rf.lastApplied {
+				args.Entries = rf.log[nextIndex:]
+			}
+			if !heartbeat {
+				args.Entries = rf.log[args.PrevLogIndex:]
+			}
+
+			ok := rf.peers[rf.me].Call("Raft.AppendEntries", args, reply)
+			if !ok {
+				ERR.Printf("Push Msg fail, Server:%d", rf.me)
+				continue
+			}
+			if !reply.Success {
+				if reply.Term > rf.currentTerm {
+					rf.ToFollower()
+					return
+				}
+				rf.nextIndex[rf.me] = reply.LastApplied
+			} else {
+
+			}
+		}
+	}
+
+	// TODO: send msg to peers, and majority of peer return true, the leader will
+	// commit msg to applyMsg
+	if commitMsg {
+		rf.commitIndex = rf.lastApplied
+		rf.chanMsg <- rf.log[rf.commitIndex].Command
+	}
 }
 
 //
@@ -398,46 +479,8 @@ func (rf *Raft) LastLogTerm() int {
 
 // periodically send heartbreak to Followers.
 func (rf *Raft) BroadcastHeartbeats() {
-	INFO.Printf("SERVER: %d, BroadcastHeartbeats", rf.me)
-	for id, peer := range rf.peers {
-		args := LogEntryArgs{}
-		args.Term = rf.currentTerm
-		args.LeaderId = rf.me
-		args.PrevLogIndex = rf.LastLogIndex()
-		args.PrevLogIndex = rf.LastLogTerm()
-		args.LeaderCommit = rf.commitIndex
-		//TODO: args.Entries = rf.log
-		//假如leader不知道follower的情况，Entries先为 null or lastApplyEntries
-		//知道情况的话，接上 leader.log - follower.log
-		reply := LogEntryReply{}
-
-		if id == rf.me && rf.state == StateLeader {
-			rf.persist()
-			//
-			// Save snapshot to disk
-			// Leaders:
-			//  - 选举成功：发送 initial empty AppendEntries RPCs(heartbeat)给其他服务器
-			//  - 收到client的command: append entry，之后发送entry给 state machine
-			//  - if last log index >= nextIndex for a followrr: 发送AppendEntries RPC给server
-			//    - 成功后: follower更新 nextIndex和matchIndex
-			//    - 失败后: 自降nextIndex、重试
-			//  -当前任期的log.term == currentTerm，set commitIndex = N
-		} else {
-			ok := peer.Call("Raft.AppendEntries", &args, &reply)
-			if !ok {
-				ERR.Fatalf("REQUEST VOTE, SERVER:%d", rf.me)
-				continue
-			}
-			if !reply.Success {
-
-			}
-		}
-	}
-}
-
-// Apply local msg to state machines
-func (rf *Raft) ApplyMsg() {
-
+	// INFO.Printf("SERVER: %d, BroadcastHeartbeats", rf.me)
+	rf.PublishMsg(true)
 }
 
 func (rf *Raft) ToFollower() {
@@ -519,11 +562,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.state = StateFollower
-	rf.applyMsgs = applyCh
+	rf.chanMsg = applyCh
 
 	rf.currentTerm = 0
 	rf.commitIndex = 0
-	rf.lastApplied = -1
+	rf.lastApplied = 0
+
 	rf.leaderId = -1
 	rf.votedFor = -1
 	rf.votedResult = make(map[int]int)
