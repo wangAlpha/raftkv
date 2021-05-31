@@ -10,7 +10,6 @@ package raft
 
 import (
 	"fmt"
-	"log"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -32,7 +31,6 @@ func TestInitialElection2A(t *testing.T) {
 
 	// is a leader elected?
 	cfg.checkOneLeader()
-	log.Printf("11111111111111111111")
 	// sleep a bit to avoid racing with followers learning of the
 	// election, then check that all peers agree on the term.
 	time.Sleep(50 * time.Millisecond)
@@ -47,10 +45,8 @@ func TestInitialElection2A(t *testing.T) {
 	if term1 != term2 {
 		fmt.Printf("warning: term changed even though there were no failures")
 	}
-	log.Printf("222222222222222222222222")
 	// there should still be a leader.
 	cfg.checkOneLeader()
-	log.Printf("333333333333333333333333")
 	cfg.end()
 }
 

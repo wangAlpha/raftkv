@@ -109,9 +109,9 @@ type Raft struct {
 // TODO:Your code here (2A).
 func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
-	currentTerm := int(rf.currentTerm)
+	currentTerm := rf.currentTerm
 	isLeader := (rf.me == rf.leaderId)
-	rf.mu.Lock()
+	rf.mu.Unlock()
 
 	return currentTerm, isLeader
 }
@@ -205,7 +205,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.Term = rf.currentTerm
 	reply.VoteGranted = false
 	if args.Term > rf.currentTerm && args.LastLogIndex >= rf.lastApplied {
-		if rf.votedFor != -1 {
+		if rf.votedFor == -1 {
 			rf.votedFor = args.CandidatedId
 			reply.VoteGranted = true
 			rf.chanVoteGranted <- true
@@ -273,11 +273,11 @@ func (rf *Raft) SendRequestVote(peer int, args *RequestVoteArgs) {
 		rf.chanWinElect <- true
 		rf.persist()
 	}
-	INFO.Printf("BROADCAST request vote result, SERVER:%d, Result: %d, %v", rf.me, rf.leaderId, rf.votedResult)
+	INFO.Printf("BROADCAST request vote result, SERVER:%d, Result: %d, %v", rf.me, rf.votedFor, rf.votedResult)
 }
 
 func (rf *Raft) AppendEntries(args *LogEntryArgs, reply *LogEntryReply) {
-	INFO.Printf("SERVER:%d, AppendEntries, State: %s", rf.me, StateString[rf.state])
+	INFO.Printf("SERVER:%d, AppendEntries, State: %s, currentTerm: %d", rf.me, StateString[rf.state], rf.currentTerm)
 
 	//1. Reply false if term < currentTerm
 	reply.Term = rf.currentTerm
@@ -288,10 +288,11 @@ func (rf *Raft) AppendEntries(args *LogEntryArgs, reply *LogEntryReply) {
 		reply.CommitIndex = -1
 		return
 	}
+	rf.currentTerm = args.Term
 
 	//2. Reply false if log does't contain an entry at prevLogIndex
 	//	 whose term matches prevLogTerm
-	if int(args.PrevLogIndex) > len(rf.log)-1 {
+	if args.PrevLogIndex > len(rf.log)-1 {
 		reply.LastApplied = rf.lastApplied
 		reply.CommitIndex = rf.commitIndex
 		return
@@ -350,11 +351,12 @@ func (rf *Raft) AppendEntries(args *LogEntryArgs, reply *LogEntryReply) {
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	index := -1
-	term := -1
-	isLeader := true
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
-	// Your code here (2B).
+	index := rf.commitIndex
+	term := rf.currentTerm
+	isLeader := (rf.me == rf.leaderId)
 
 	return index, term, isLeader
 }
