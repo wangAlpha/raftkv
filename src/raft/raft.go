@@ -380,13 +380,17 @@ func (rf *Raft) BuildMsg(command interface{}) ApplyMsg {
 }
 
 func (rf *Raft) PublishMsg(heartbeat bool) {
-	INFO.Printf("ApplyState,Server: %d, leader: %d", rf.me, rf.leaderId)
+	if heartbeat {
+		INFO.Printf("Heartbeat,Server: %d, state: %s", rf.me, StateString[rf.state])
+	} else {
+		INFO.Printf("ApplyState,Server: %d, leader: %d", rf.me, rf.leaderId)
+	}
 
 	commitMsg := false
-	if rf.state != StateLeader {
-		WARN.Printf("AppState Fail, Server:%d is not leader, %s", rf.me, StateString[rf.state])
-		return
-	}
+	//if rf.state != StateLeader {
+	//	//WARN.Printf("AppState Fail, Server:%d is not leader, %s", rf.me, StateString[rf.state])
+	//	return
+	//}
 
 	args := &LogEntryArgs{}
 	args.Term = rf.currentTerm
@@ -397,8 +401,9 @@ func (rf *Raft) PublishMsg(heartbeat bool) {
 		args.LeaderCommit = rf.lastApplied
 	}
 
+	majority := len(rf.peers) / 2 +1
+	applied := 0
 	for peer := range rf.peers {
-
 		nextIndex := rf.nextIndex[rf.me] - 1
 		if nextIndex < 0{
 			nextIndex = 0
@@ -429,14 +434,15 @@ func (rf *Raft) PublishMsg(heartbeat bool) {
 				}
 				rf.nextIndex[rf.me] = reply.LastApplied
 			} else {
-
+				applied ++
 			}
 		}
 	}
-
+	commitMsg = (applied >= majority)
 	// TODO: send msg to peers, and majority of peer return true, the leader will
 	// commit msg to applyMsg
 	if commitMsg {
+		INFO.Printf("Commit command %d,", rf.log[rf.commitIndex].Command)
 		rf.commitIndex = rf.lastApplied
 		rf.chanMsg <- rf.log[rf.commitIndex].Command
 	}
