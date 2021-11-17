@@ -7,14 +7,17 @@ package main
 // go build -buildmode=plugin mtiming.go
 //
 
-import "../mr"
-import "strings"
-import "fmt"
-import "os"
-import "syscall"
-import "time"
-import "sort"
-import "io/ioutil"
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+	"sort"
+	"strings"
+	"syscall"
+	"time"
+
+	"mit6.824/src/mr"
+)
 
 func nparallel(phase string) int {
 	// create a file so that other workers will see that
@@ -71,15 +74,17 @@ func Map(filename string, contents string) []mr.KeyValue {
 	kva := []mr.KeyValue{}
 	kva = append(kva, mr.KeyValue{
 		fmt.Sprintf("times-%v", pid),
-		fmt.Sprintf("%.1f", ts)})
+		fmt.Sprintf("%.1f", ts),
+	})
 	kva = append(kva, mr.KeyValue{
 		fmt.Sprintf("parallel-%v", pid),
-		fmt.Sprintf("%d", n)})
+		fmt.Sprintf("%d", n),
+	})
 	return kva
 }
 
 func Reduce(key string, values []string) string {
-	//n := nparallel("reduce")
+	// n := nparallel("reduce")
 
 	// sort values to ensure deterministic output.
 	vv := make([]string, len(values))

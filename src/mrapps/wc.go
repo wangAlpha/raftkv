@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode"
 
-	"../mr"
+	"mit6.824/src/mr"
 )
 
 //

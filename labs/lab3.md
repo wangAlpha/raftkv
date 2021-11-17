@@ -12,7 +12,12 @@
 
 In this lab you will build a fault-tolerant key/value storage service using your Raft library from [lab 2](http://nil.csail.mit.edu/6.824/2020/labs/lab-raft.html). Your key/value service will be a replicated state machine, consisting of several key/value servers that use Raft for replication. Your key/value service should continue to process client requests as long as a majority of the servers are alive and can communicate, in spite of other failures or network partitions.
 
-The service supports three operations: `Put(key, value)`, `Append(key, arg)`, and `Get(key)`. It maintains a simple database of key/value pairs. Keys and values are strings. `Put()` replaces the value for a particular key in the database, `Append(key, arg)` appends arg to key's value, and `Get()` fetches the current value for a key. A `Get` for a non-existant key should return an empty string. An `Append` to a non-existant key should act like `Put`. Each client talks to the service through a `Clerk` with Put/Append/Get methods. A `Clerk` manages RPC interactions with the servers.
+服务支持的操作`Put(Key, Value)`, `Append(key, arg)`,和 `Get(key)`。
+`Put(Key)`替换数据库中的key，
+`Append(key, arg)`append arg to key's value
+
+`Clerk`管理与服务器的交互
+<!-- The service supports three operations: `Put(key, value)`, `Append(key, arg)`, and `Get(key)`. It maintains a simple database of key/value pairs. Keys and values are strings. `Put()` replaces the value for a particular key in the database, `Append(key, arg)` appends arg to key's value, and `Get()` fetches the current value for a key. A `Get` for a non-existant key should return an empty string. An `Append` to a non-existant key should act like `Put`. Each client talks to the service through a `Clerk` with Put/Append/Get methods. A `Clerk` manages RPC interactions with the servers. -->
 
 Your service must provide strong consistency to application calls to the `Clerk` Get/Put/Append methods. Here's what we mean by strong consistency. If called one at a time, the Get/Put/Append methods should act as if the system had only one copy of its state, and each call should observe the modifications to the state implied by the preceding sequence of calls. For concurrent calls, the return values and final state must be the same as if the operations had executed one at a time in some order. Calls are concurrent if they overlap in time, for example if client X calls `Clerk.Put()`, then client Y calls `Clerk.Append()`, and then client X's call returns. Furthermore, a call must observe the effects of all calls that have completed before the call starts (so we are technically asking for linearizability).
 
@@ -48,8 +53,13 @@ $
 
 ### Part A: Key/value service without log compaction
 
-Each of your key/value servers ("kvservers") will have an associated Raft peer. Clerks send `Put()`, `Append()`, and `Get()` RPCs to the kvserver whose associated Raft is the leader. The kvserver code submits the Put/Append/Get operation to Raft, so that the Raft log holds a sequence of Put/Append/Get operations. All of the kvservers execute operations from the Raft log in order, applying the operations to their key/value databases; the intent is for the servers to maintain identical replicas of the key/value database.
+Each of your key/value servers ("kvservers") will have an associated Raft peer.
 
+ Clerks 发送 `Put()`, `Append()`, and `Get()` RPCs to the kvserver whose associated Raft is the leader.
+ kvserver code 提交Put/Append/Get 操作给 Raft, so that the Raft log holds a sequence of Put/Append/Get operations.
+ 所有kvservers执行 Raft的log操作 operations from the Raft log in order, applying the operations to their key/value databases; the intent is for the servers to maintain identical replicas of the key/value database.
+
+`Cleark`
 A `Clerk` sometimes doesn't know which kvserver is the Raft leader. If the `Clerk` sends an RPC to the wrong kvserver, or if it cannot reach the kvserver, the `Clerk` should re-try by sending to a different kvserver. If the key/value service commits the operation to its Raft log (and hence applies the operation to the key/value state machine), the leader reports the result to the `Clerk` by responding to its RPC. If the operation failed to commit (for example, if the leader was replaced), the server reports an error, and the `Clerk` retries with a different server.
 
 Your kvservers should not directly communicate; they should only interact with each other through Raft. For all parts of Lab 3, you must make sure that your Raft implementation continues to pass all of the Lab 2 tests.
@@ -69,7 +79,7 @@ Now you should modify your solution to continue in the face of network and serve
 
 Add code to handle failures, and to cope with duplicate `Clerk` requests, including situations where the `Clerk` sends a request to a kvserver leader in one term, times out waiting for a reply, and re-sends the request to a new leader in another term. The request should execute just once. Your code should pass the `go test -run 3A` tests.
 
-- Your solution needs to handle a leader that has called Start() for a Clerk's RPC, but loses its leadership before the request is committed to the log. In this case you should arrange for the Clerk to re-send the request to other servers until it finds the new leader. One way to do this is for the server to detect that it has lost leadership, by noticing that a different request has appeared at the index returned by Start(), or that Raft's term has changed. If the ex-leader is partitioned by itself, it won't know about new leaders; but any client in the same partition won't be able to talk to a new leader either, so it's OK in this case for the server and client to wait indefinitely until the partition heals.
+- 解决方案应该处理一个领导调用了 `Start()` 对一个Cleark's RPC, 但在请求提交之后丢失了它的领导权。In this case you should arrange for the Clerk to re-send the request to other servers until it finds the new leader. One way to do this is for the server to detect that it has lost leadership, by noticing that a different request has appeared at the index returned by Start(), or that Raft's term has changed. If the ex-leader is partitioned by itself, it won't know about new leaders; but any client in the same partition won't be able to talk to a new leader either, so it's OK in this case for the server and client to wait indefinitely until the partition heals.
 - You will probably have to modify your Clerk to remember which server turned out to be the leader for the last RPC, and send the next RPC to that server first. This will avoid wasting time searching for the leader on every RPC, which may help you pass some of the tests quickly enough.
 - You will need to uniquely identify client operations to ensure that the key/value service executes each one just once.
 - Your scheme for duplicate detection should free server memory quickly, for example by having each RPC imply that the client has seen the reply for its previous RPC. It's OK to assume that a client will make only one call into a Clerk at a time.
@@ -114,21 +124,6 @@ ok      kvraft  237.352s
 
 The numbers after each `Passed` are real time in seconds, number of peers, number of RPCs sent (including client RPCs), and number of key/value operations executed (`Clerk` Get/Put/Append calls).
 
-### Handin procedure for lab 3A
-
-Run the tests for part A one final time. Run `make lab3a` to upload your code to the submission website at https://6824.scripts.mit.edu/2020/handin.py/.
-
-You may use your MIT Certificate or request an API key via email to log in for the first time. Your API key (`XXX`) is displayed once you are logged in, and can be used to upload the lab from the console as follows.
-
-```shell
-$ cd ~/6.824
-$ echo "XXX" > api.key
-$ make lab3a
-```
-
-Check the submission website to make sure it sees your submission.
-
-You may submit multiple times. We will use the timestamp of your **last** submission for the purpose of calculating late days. Your grade is determined by the score your solution **reliably** achieves when we run the tests.
 
 ### Part B: Key/value service with log compaction
 
@@ -153,7 +148,7 @@ Modify your Raft leader code to send an InstallSnapshot RPC to a follower when t
 - Make sure you pass `TestSnapshotRPC` before moving on to the other Snapshot tests.
 - A reasonable amount of time to take for the Lab 3 tests is 400 seconds of real time and 700 seconds of CPU time. Further, `go test -run TestSnapshotSize` should take less than 20 seconds of real time.
 
-Your code should pass the 3B tests (as in the example here) as well as the 3A tests (and your Raft must continue to pass the Lab 2 tests).
+3B test:
 
 ```shell
 $ go test -run 3B
@@ -177,22 +172,3 @@ Test: unreliable net, restarts, partitions, snapshots, many clients, linearizabi
 PASS
 ok      kvraft  129.114s
 ```
-
-### Handin procedure for lab 3B
-
-Double-check that your code passes all the tests. Run `make lab3b` to upload your code to the submission website, at https://6824.scripts.mit.edu/2020/handin.py/.
-
-You may use your MIT Certificate or request an API key via email to log in for the first time. Your API key (`XXX`) is displayed once you logged in, which can be used to upload the lab from the console as follows.
-
-```shell
-$ echo "XXX" > api.key
-$ make lab3b
-```
-
-Check the submission website to make sure it sees your submission.
-
-You may submit multiple times. We will use the timestamp of your **last** submission for the purpose of calculating late days. Your grade is determined by the score your solution **reliably** achieves when we run the tests.
-
-------
-
-Please post questions on [Piazza](http://piazza.com/).

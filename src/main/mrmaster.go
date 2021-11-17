@@ -2,7 +2,7 @@ package main
 
 //
 // start the master process, which is implemented
-// in ../mr/master.go
+// in mit6.824/src/mr/master.go
 //
 // go run mrmaster.go pg*.txt
 //
@@ -14,7 +14,7 @@ import (
 	"os"
 	"time"
 
-	"../mr"
+	"mit6.824/src/mr"
 )
 
 func main() {

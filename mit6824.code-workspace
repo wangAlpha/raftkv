@@ -1,14 +1,7 @@
 {
 	"folders": [
 		{
-			"name": "raft",
-			"path": "./src/raft"
-		},
-		{
-			"path": "./src/labrpc"
-		},
-		{
-			"path": "./src/labgob"
+			"path": "./src"
 		}
 	],
 	"settings": {}

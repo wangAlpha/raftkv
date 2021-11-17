@@ -4,7 +4,7 @@ package main
 // start a diskvd server. it's a member of some replica
 // group, which has other members, and it needs to know
 // how to talk to the members of the shardmaster service.
-// used by ../diskv/test_test.go
+// used by mit6.824/src/diskv/test_test.go
 //
 // arguments:
 //   -g groupid
@@ -15,12 +15,14 @@ package main
 //   -d directory
 //   -r restart
 
-import "time"
-import "diskv"
-import "os"
-import "fmt"
-import "strconv"
-import "runtime"
+import (
+	"diskv"
+	"fmt"
+	"os"
+	"runtime"
+	"strconv"
+	"time"
+)
 
 func usage() {
 	fmt.Printf("Usage: diskvd -g gid -m master... -s server... -i my-index -d dir\n")

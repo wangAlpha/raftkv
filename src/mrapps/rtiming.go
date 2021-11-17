@@ -7,12 +7,15 @@ package main
 // go build -buildmode=plugin rtiming.go
 //
 
-import "../mr"
-import "fmt"
-import "os"
-import "syscall"
-import "time"
-import "io/ioutil"
+import (
+	"fmt"
+	"io/ioutil"
+	"os"
+	"syscall"
+	"time"
+
+	"mit6.824/src/mr"
+)
 
 func nparallel(phase string) int {
 	// create a file so that other workers will see that
@@ -60,7 +63,6 @@ func nparallel(phase string) int {
 }
 
 func Map(filename string, contents string) []mr.KeyValue {
-
 	kva := []mr.KeyValue{}
 	kva = append(kva, mr.KeyValue{"a", "1"})
 	kva = append(kva, mr.KeyValue{"b", "1"})

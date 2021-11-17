@@ -15,7 +15,7 @@ import (
 	"sync"
 	"testing"
 
-	"../labrpc"
+	"mit6.824/src/labrpc"
 
 	crand "crypto/rand"
 	"encoding/base64"
@@ -181,6 +181,7 @@ func (cfg *config) start1(i int) {
 			if m.CommandValid == false {
 				// ignore other types of ApplyMsg
 			} else {
+				log.Printf("Server:%d, Received command: %v",i, m.Command)
 				v := m.Command
 				cfg.mu.Lock()
 				for j := 0; j < len(cfg.logs); j++ {
@@ -390,7 +391,11 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 			}
 			count += 1
 			cmd = cmd1
+			log.Printf("nCommited, ok: %v, cmd1: %v", ok, cmd1)
+		} else {
+			log.Printf("nCommited, ok: %v, cmd1: %v", ok, cmd1)
 		}
+
 	}
 	return count, cmd
 }
@@ -467,6 +472,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
+				log.Printf("nd = %d, expectedServers: %d, cmd = %d, cmd1 = %d", nd, expectedServers, cmd, cmd1)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {
