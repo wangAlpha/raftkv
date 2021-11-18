@@ -13,10 +13,7 @@
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
-src/main/mrmaster
-src/main/mrsequential
-src/main/mrworker
-src/main/mr-tmp/*
+
 src/logFile.log
 pkg/*
 bin/*

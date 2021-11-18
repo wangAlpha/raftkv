@@ -9,19 +9,19 @@ package raft
 //
 
 import (
+	"encoding/base64"
+	"fmt"
 	"log"
+	"math/big"
 	"math/rand"
 	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"mit6.824/src/labrpc"
 
 	crand "crypto/rand"
-	"encoding/base64"
-	"fmt"
-	"math/big"
-	"time"
 )
 
 func randstring(n int) string {
@@ -181,7 +181,7 @@ func (cfg *config) start1(i int) {
 			if m.CommandValid == false {
 				// ignore other types of ApplyMsg
 			} else {
-				log.Printf("Server:%d, Received command: %v",i, m.Command)
+				log.Printf("Server:%d, Received command: %v", i, m.Command)
 				v := m.Command
 				cfg.mu.Lock()
 				for j := 0; j < len(cfg.logs); j++ {
@@ -352,7 +352,7 @@ func (cfg *config) checkTerms() int {
 			if term == -1 {
 				term = xterm
 			} else if term != xterm {
-				cfg.t.Fatalf("servers disagree on term")
+				cfg.t.Fatalf("servers disagree on term term: %d xterm: %d", term, xterm)
 			}
 		}
 	}
