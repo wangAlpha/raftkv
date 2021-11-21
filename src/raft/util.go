@@ -21,3 +21,10 @@ func checkError(err error, msg string) {
 		os.Exit(-1)
 	}
 }
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
