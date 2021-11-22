@@ -152,6 +152,7 @@ func TestFailAgree2B(t *testing.T) {
 
 	cfg.begin("Test (2B): agreement despite follower disconnection")
 
+	println("First test")
 	cfg.one(101, servers, false)
 
 	// disconnect one follower from the network.
@@ -165,9 +166,13 @@ func TestFailAgree2B(t *testing.T) {
 	time.Sleep(RaftElectionTimeout)
 	cfg.one(104, servers-1, false)
 	cfg.one(105, servers-1, false)
-
+	for id, rf := range cfg.rafts {
+		fmt.Printf("id: %dlog : %+v\n", id, rf.log)
+	}
+	println("Second test start")
 	// re-connect
 	cfg.connect((leader + 1) % servers)
+	println("Second reconnect done")
 
 	// the full set of servers should preserve
 	// previous agreements, and be able to agree
@@ -824,7 +829,6 @@ func TestFigure8Unreliable2C(t *testing.T) {
 }
 
 func internalChurn(t *testing.T, unreliable bool) {
-
 	servers := 5
 	cfg := make_config(t, servers, unreliable)
 	defer cfg.cleanup()
