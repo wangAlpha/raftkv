@@ -77,7 +77,6 @@ type LogEntry struct {
 	Term    int
 	Index   int
 	Command interface{}
-	// Command interface{}
 }
 
 //
@@ -315,9 +314,8 @@ func (rf *Raft) UpdateCommitIndex() {
 	}
 }
 
+// Broad heartbeat RPC handler.
 func (rf *Raft) AppendEntries(args *LogEntryArgs, reply *LogEntryReply) {
-	INFO.Printf("ID:%dAE:s:%s log: %d Entries: %d", rf.me, StateName[rf.state], len(rf.log), len(args.Entries))
-	defer INFO.Printf("ID:%dAE:s:%slog: %d Entries: %dEND", rf.me, StateName[rf.state], len(rf.log), len(args.Entries))
 	defer rf.persist()
 	reply.Success = false
 	reply.Term = rf.currentTerm
@@ -333,10 +331,10 @@ func (rf *Raft) AppendEntries(args *LogEntryArgs, reply *LogEntryReply) {
 		rf.StateSet(StateFollower)
 	}
 	rf.chanHeartbeat <- true
-	rf.LogMatch(args, reply)
+	rf.ResolveConflictLogs(args, reply)
 }
 
-func (rf *Raft) LogMatch(args *LogEntryArgs, reply *LogEntryReply) {
+func (rf *Raft) ResolveConflictLogs(args *LogEntryArgs, reply *LogEntryReply) {
 	if args.PrevLogIndex > rf.LastLogIndex() {
 		INFO.Printf("PrevLogIndex:%d, LastLogIndex:%d", args.PrevLogIndex, rf.LastLogIndex())
 		reply.NextTryIndex = rf.LastLogIndex() + 1
@@ -401,6 +399,7 @@ func (rf *Raft) GetRaftState() []byte {
 	return w.Bytes()
 }
 
+// InstallSnapshot RPC handler
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArg, reply *InstallSnapshotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -455,16 +454,15 @@ func (rf *Raft) TrimLog(last_included_index int, last_included_term int) {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// INFO.Printf("Test send a command: %d", command)
 	// defer INFO.Printf("Test send a command: %dEnd", command)
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-	defer rf.persist()
-
 	term, index := -1, -1
 	isLeader := (rf.state == StateLeader)
 	if isLeader {
 		term = rf.currentTerm
 		index = rf.LastLogIndex() + 1
+		rf.mu.Lock()
 		rf.log = append(rf.log, LogEntry{Index: index, Term: term, Command: command})
+		rf.persist()
+		rf.mu.Unlock()
 	}
 
 	return index, term, isLeader
@@ -496,8 +494,6 @@ func (rf *Raft) BroadcastHeartbeats() {
 					ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 					if ok {
 						rf.ParseHeartbeatReply(server, args, reply)
-					} else {
-						INFO.Printf("Failed :%t S: %s T: %d \n", ok, StateName[rf.state], rf.currentTerm)
 					}
 				}(peer, args)
 			} else {
@@ -514,8 +510,6 @@ func (rf *Raft) BroadcastHeartbeats() {
 					ok := rf.peers[peer].Call("Raft.InstallSnapshot", args, reply)
 					if ok && rf.state == StateLeader {
 						rf.ParseInstallSnapshotReply(peer, args, reply)
-					} else {
-						WARN.Printf("ID: %d call InstallSnapshot Fail %s %d", peer, StateName[rf.state], rf.currentTerm)
 					}
 				}(peer, args)
 			}
@@ -568,7 +562,7 @@ func (rf *Raft) Run() {
 				rf.StateSet(StateCandidate)
 				rf.persist()
 				rf.mu.Unlock()
-				INFO.Printf("ID:%dbecome to Candidate", rf.me)
+				// INFO.Printf("ID:%dTo C", rf.me)
 			}
 		case StateLeader:
 			go rf.BroadcastHeartbeats()
@@ -579,7 +573,7 @@ func (rf *Raft) Run() {
 
 			select {
 			case <-rf.chanWinElect:
-				INFO.Printf("ID:%d log:%d, become leader", rf.me, len(rf.log))
+				// INFO.Printf("ID:%dTo L log:%d,", rf.me, len(rf.log))
 			case <-rf.chanHeartbeat:
 				rf.mu.Lock()
 				rf.StateSet(StateFollower)
