@@ -144,6 +144,10 @@ func (rf *Raft) readPersist(data []byte) {
 	d.Decode(&rf.log)
 }
 
+func (rf *Raft) GetStateSize() int {
+	return rf.persister.RaftStateSize()
+}
+
 func (rf *Raft) RecoverFromSnapshot(snapshot []byte) {
 	if snapshot == nil || len(snapshot) < 1 {
 		return
@@ -390,6 +394,10 @@ func (rf *Raft) ParseInstallSnapshotReply(peer int, args *InstallSnapshotArg, re
 	}
 }
 
+func (rf *Raft) GetRaftStateSize() int {
+	return len(rf.log)
+}
+
 func (rf *Raft) GetRaftState() []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
@@ -397,6 +405,24 @@ func (rf *Raft) GetRaftState() []byte {
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
 	return w.Bytes()
+}
+
+func (rf *Raft) MakeRaftSnaphot(snapshot []byte, index int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	base_index, last_index := rf.log[0].Index, rf.LastLogIndex()
+	if base_index < index || last_index < index {
+		INFO.Printf("ERR: %v", rf.log)
+		return
+	}
+	rf.TrimLog(index, rf.log[index-base_index].Term)
+
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.log[0].Index)
+	e.Encode(rf.log[0].Term)
+	snapshot = append(w.Bytes(), snapshot...)
+	rf.persister.SaveStateAndSnapshot(rf.GetRaftState(), snapshot)
 }
 
 // InstallSnapshot RPC handler
@@ -466,6 +492,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	}
 
 	return index, term, isLeader
+}
+
+func (rf *Raft) GetLeaderId() int {
+	if rf.state == StateCandidate {
+		return -1
+	}
+	return rf.leaderId
 }
 
 // periodically send heartbreak to Followers.

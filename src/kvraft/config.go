@@ -319,7 +319,7 @@ func (cfg *config) StartServer(i int) {
 	cfg.kvservers[i] = StartKVServer(ends, i, cfg.saved[i], cfg.maxraftstate)
 
 	kvsvc := labrpc.MakeService(cfg.kvservers[i])
-	rfsvc := labrpc.MakeService(cfg.kvservers[i].rf)
+	rfsvc := labrpc.MakeService(cfg.kvservers[i].raft)
 	srv := labrpc.MakeServer()
 	srv.AddService(kvsvc)
 	srv.AddService(rfsvc)
@@ -331,7 +331,7 @@ func (cfg *config) Leader() (bool, int) {
 	defer cfg.mu.Unlock()
 
 	for i := 0; i < cfg.n; i++ {
-		_, is_leader := cfg.kvservers[i].rf.GetState()
+		_, is_leader := cfg.kvservers[i].raft.GetState()
 		if is_leader {
 			return true, i
 		}

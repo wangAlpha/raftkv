@@ -172,3 +172,11 @@ Test: unreliable net, restarts, partitions, snapshots, many clients, linearizabi
 PASS
 ok      kvraft  129.114s
 ```
+
+
+
+![image-20211126202112741](./client_request_RPC.png)
+
+![image-20211126202216784](./register_client_RPC.png)
+
+![image-20211126202258738](./client_query_RPC.png)
