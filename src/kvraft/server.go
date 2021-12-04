@@ -32,33 +32,41 @@ type KVServer struct {
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
 
-	maxRaftState  int // snapshot if log grows this big
-	stateMachine  *KVStateMachine
-	lastOperation map[int64]int
-	notifyChan    map[int]chan CommandReply
+	maxRaftState int // snapshot if log grows this big
+	stateMachine *KVStateMachine
+	lastOpResult map[int64]CommandReply
+	notifyChan   map[int]chan CommandReply
 }
 
 func NewKVStateMachine() *KVStateMachine {
 	return &KVStateMachine{data: make(map[string]string)}
 }
 
-func (kv *KVStateMachine) ExecuteCommand(command Command) (string, int) {
-	if command.OpType == OpPut {
-		kv.data[command.Key] = command.Value
-		return "Ok", Ok
-	} else if command.OpType == OpGet {
-		if value, ok := kv.data[command.Key]; ok {
-			return value, Ok
-		}
-	} else if command.OpType == OpAppend {
-		kv.data[command.Key] += command.Value
-		return "Ok", Ok
+func (server *KVServer) ExecuteCommand(cmd Command) (string, int) {
+	if server.isDuplicate(cmd.ClientId, cmd.CommandId) && cmd.OpType != OpGet {
+		result := server.lastOpResult[cmd.ClientId]
+		return result.Value, result.StatusCode
 	}
-	return "Error", ErrOperator
+	response, status_code := "Error", Ok
+	switch cmd.OpType {
+	case OpPut:
+		server.stateMachine.data[cmd.Key] = cmd.Value
+		response = "Put:" + cmd.Value
+	case OpGet:
+		if value, ok := server.stateMachine.data[cmd.Key]; ok {
+			response = value
+		} else {
+			status_code = ErrNoneKey
+		}
+	case OpAppend:
+		server.stateMachine.data[cmd.Key] += cmd.Value
+		response = "Append:" + cmd.Value
+	}
+	return response, status_code
 }
 
-func (server *KVServer) isDuplicate(client_id int64, command_id int) bool {
-	if cmd_id, ok := server.lastOperation[client_id]; ok && cmd_id >= command_id {
+func (server *KVServer) isDuplicate(client_id int64, cmd_id int) bool {
+	if result, ok := server.lastOpResult[client_id]; ok && result.CommnadId >= cmd_id {
 		return true
 	}
 	return false
@@ -71,13 +79,19 @@ func (server *KVServer) getNotifyChan(index int) chan CommandReply {
 	return server.notifyChan[index]
 }
 
+func (server *KVServer) retrieveLastOpResult(client_id int64) CommandReply {
+	return server.lastOpResult[client_id]
+}
+
+func (server *KVServer) removeNotifyChan(index int) {
+	delete(server.notifyChan, index)
+}
+
 func (server *KVServer) HandleRequest(args *CommandArgs, reply *CommandReply) {
-	INFO("Handling request")
-	server.mu.Lock()
-	defer server.mu.Unlock()
-	command := args.Request
-	if server.isDuplicate(args.ClientId, args.CommnadId) {
-		INFO("Duplicate command")
+	command := args.RequestOp
+	if server.isDuplicate(args.ClientId, args.CommandId) && command.OpType != OpGet {
+		*reply = server.retrieveLastOpResult(args.ClientId)
+		reply.Value = "Dup_" + reply.Value
 		return
 	}
 	index, _, is_leader := server.raft.Start(command)
@@ -86,19 +100,26 @@ func (server *KVServer) HandleRequest(args *CommandArgs, reply *CommandReply) {
 		reply.LeaderId = server.raft.GetLeaderId()
 		return
 	}
-
+	server.mu.Lock()
 	ch := server.getNotifyChan(index)
+	server.mu.Unlock()
 	select {
 	case msg := <-ch:
-		INFO("msg: %v", msg)
-		reply.Value = msg.Value
-		reply.StatusCode = msg.StatusCode
-
+		if command.ClientId == msg.ClientId && command.CommandId == msg.CommnadId {
+			INFO("ClientID:%d %d Op:%d result,  value: %s, code: %s", command.ClientId, command.CommandId, command.OpType, msg.Value, ErrName[msg.StatusCode])
+			*reply = msg
+		} else {
+			reply.Value = "ERROR"
+			reply.StatusCode = ErrOperator
+		}
 	case <-time.After(OverTime):
 		INFO("timeout")
 		reply.Value = "ErrorTimeout"
 		reply.StatusCode = ErrTimeout
 	}
+	server.mu.Lock()
+	server.removeNotifyChan(index)
+	server.mu.Unlock()
 }
 
 func (kv *KVServer) Kill() {
@@ -108,32 +129,38 @@ func (kv *KVServer) Kill() {
 
 // receiver operator and execute its.
 func (server *KVServer) handleCommand() {
-	for {
-		msg := <-server.applyCh
-		if msg.CommandValid {
-			command := msg.Command.(Command)
-			// fmt.Printf("msg: %+v", msg.Command)
-			value, status_code := server.stateMachine.ExecuteCommand(command)
-			reply := CommandReply{Value: value, StatusCode: status_code}
-			ch := server.getNotifyChan(msg.CommandIndex)
-			ch <- reply
-			if server.maxRaftState != -1 && server.raft.GetRaftStateSize() > server.maxRaftState {
-				w := new(bytes.Buffer)
-				e := labgob.NewEncoder(w)
-				e.Encode(server.lastOperation)
-				e.Encode(server.stateMachine.data)
-				go server.raft.MakeRaftSnaphot(msg.Snapshot, msg.CommandIndex)
-			}
-		} else if msg.UseSnapshot {
+	for msg := range server.applyCh {
+		// server.mu.Lock()
+		if msg.UseSnapshot {
 			w := new(bytes.Buffer)
 			d := labgob.NewDecoder(w)
 			var last_log_index int // unused placeholder
 			var last_log_term int  // unused placeholder
 			d.Decode(&last_log_index)
 			d.Decode(&last_log_term)
-			d.Decode(&server.lastOperation)
+			d.Decode(&server.lastOpResult)
 			d.Decode(&server.stateMachine.data)
+		} else if msg.CommandValid {
+			cmd := msg.Command.(Command)
+			value, status_code := server.ExecuteCommand(cmd)
+			reply := CommandReply{
+				ClientId:   cmd.ClientId,
+				CommnadId:  cmd.CommandId,
+				StatusCode: status_code,
+				Value:      value,
+			}
+			server.lastOpResult[cmd.ClientId] = reply
+			ch := server.getNotifyChan(msg.CommandIndex)
+			ch <- reply
+			if server.maxRaftState != -1 && server.raft.GetRaftStateSize() > server.maxRaftState {
+				w := new(bytes.Buffer)
+				e := labgob.NewEncoder(w)
+				e.Encode(server.lastOpResult)
+				e.Encode(server.stateMachine.data)
+				go server.raft.MakeRaftSnaphot(w.Bytes(), msg.CommandIndex)
+			}
 		}
+		// server.mu.Unlock()
 	}
 }
 
@@ -154,14 +181,17 @@ func (server *KVServer) handleCommand() {
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxRaftState int) *KVServer {
 	labgob.Register(Command{})
 	server := &KVServer{
+		mu:           sync.Mutex{},
 		me:           me,
+		applyCh:      make(chan raft.ApplyMsg, 64),
+		dead:         0,
 		maxRaftState: maxRaftState,
-		applyCh:      make(chan raft.ApplyMsg),
 		stateMachine: NewKVStateMachine(),
+		lastOpResult: make(map[int64]CommandReply),
 		notifyChan:   make(map[int]chan CommandReply),
 	}
-
 	server.raft = raft.Make(servers, me, persister, server.applyCh)
+
 	go server.handleCommand()
 	return server
 }

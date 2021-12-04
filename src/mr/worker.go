@@ -37,6 +37,7 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
 type KeyValues struct {
 	Key   string
 	Value []string
@@ -64,9 +65,9 @@ func (wk *Worker) Register() {
 	log.Printf("Worker id: %d, state: %v\n", reply.Id, reply.WorkerState.TaskState)
 }
 
-// Request task
+// RequestOp task
 func (wk *Worker) RequestTask() []string {
-	log.Printf("Worker id:%d Request a task", wk.id)
+	log.Printf("Worker id:%d RequestOp a task", wk.id)
 	args := RPCArgs{}
 	reply := RPCReply{}
 	args.Id = wk.id
@@ -115,12 +116,12 @@ func (wk *Worker) Done(inFiles []string) {
 	call("Master.WorkDone", args, &reply)
 }
 
-// 3. Request tasks
+// 3. RequestOp tasks
 // 4. Finsh tasks
 func (wk *Worker) Run() {
 	log.Printf("Worker %d is runing\n", wk.id)
 	for {
-		// Request asynchronous tasks
+		// RequestOp asynchronous tasks
 		files := wk.RequestTask() // 请求的啥任务
 		if !wk.shutdown {
 			outFiles := wk.DoTask(files)

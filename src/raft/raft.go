@@ -1,22 +1,5 @@
 package raft
 
-//
-// this is an outline of the API that raft must expose to
-// the service (or tester). see comments below for
-// each of these functions for more details.
-//
-// rf = Make(...)
-//   create a new Raft server.
-// rf.Start(command interface{}) (index, term, isleader)
-//   start agreement on a new log entry
-// rf.GetState() (term, isLeader)
-//   ask a Raft for its current term, and whether it thinks it is leader
-// ApplyMsg
-//   each time a new entry is committed to the log, each Raft peer
-//   should send an ApplyMsg to the service (or tester)
-//   in the same server.
-//
-
 import (
 	"bytes"
 	"fmt"
@@ -30,9 +13,6 @@ import (
 	"mit6.824/src/labgob"
 	"mit6.824/src/labrpc"
 )
-
-// import "bytes"
-// import "mit6.824/src/labgob"
 
 type StateMachine int
 
@@ -408,8 +388,8 @@ func (rf *Raft) GetRaftState() []byte {
 }
 
 func (rf *Raft) MakeRaftSnaphot(snapshot []byte, index int) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	// rf.mu.Lock()
+	// defer rf.mu.Unlock()
 	base_index, last_index := rf.log[0].Index, rf.LastLogIndex()
 	if base_index < index || last_index < index {
 		INFO.Printf("ERR: %v", rf.log)
@@ -480,16 +460,16 @@ func (rf *Raft) TrimLog(last_included_index int, last_included_term int) {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// INFO.Printf("Test send a command: %d", command)
 	// defer INFO.Printf("Test send a command: %dEnd", command)
+	rf.mu.Lock()
 	term, index := -1, -1
 	isLeader := (rf.state == StateLeader)
 	if isLeader {
 		term = rf.currentTerm
 		index = rf.LastLogIndex() + 1
-		rf.mu.Lock()
 		rf.log = append(rf.log, LogEntry{Index: index, Term: term, Command: command})
 		rf.persist()
-		rf.mu.Unlock()
 	}
+	rf.mu.Unlock()
 
 	return index, term, isLeader
 }
@@ -652,9 +632,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		log:         []LogEntry{{Term: 0, Index: 0}},
 
 		chanMsg:         applyCh,
-		chanVoteGranted: make(chan bool, 64),
-		chanWinElect:    make(chan bool, 64),
-		chanHeartbeat:   make(chan bool, 64),
+		chanVoteGranted: make(chan bool, 128),
+		chanWinElect:    make(chan bool, 128),
+		chanHeartbeat:   make(chan bool, 128),
 	}
 
 	// initialize from state persisted before a crash

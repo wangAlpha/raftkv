@@ -391,7 +391,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 			}
 			count += 1
 			cmd = cmd1
-			log.Printf("nCommited, ok: %v, cmd1: %v", ok, cmd1)
+			// log.Printf("nCommited, ok: %v, cmd1: %v", ok, cmd1)
 		} else {
 			log.Printf("nCommited, ok: %v, cmd1: %v", ok, cmd1)
 		}
@@ -472,17 +472,18 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
-				log.Printf("nd = %d, expectedServers: %d, cmd = %d, cmd1 = %d", nd, expectedServers, cmd, cmd1)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {
+						// log.Printf("nd = %d, expectedServers: %d, cmd = %d, cmd1 = %d", nd, expectedServers, cmd, cmd1)
 						// and it was the command we submitted.
 						return index
 					}
 				}
 				time.Sleep(20 * time.Millisecond)
 			}
-			if retry == false {
+			if !retry {
+				// log.Printf("nd = %d, expectedServers: %d, cmd = %d, cmd1 = %d", nd, expectedServers, cmd, cmd1)
 				cfg.t.Fatalf("one(%v) failed to reach agreement", cmd)
 			}
 		} else {
@@ -511,7 +512,7 @@ func (cfg *config) begin(description string) {
 // and some performance numbers.
 func (cfg *config) end() {
 	cfg.checkTimeout()
-	if cfg.t.Failed() == false {
+	if !cfg.t.Failed() {
 		cfg.mu.Lock()
 		t := time.Since(cfg.t0).Seconds()       // real time
 		npeers := cfg.n                         // number of Raft peers

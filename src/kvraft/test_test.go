@@ -216,7 +216,7 @@ func GenericTest(t *testing.T, part string, nclients int, unreliable bool, crash
 					// log.Printf("%d: client new get %v\n", cli, key)
 					v := Get(cfg, myck, key)
 					if v != last {
-						log.Fatalf("get wrong value, key %v, wanted:\n%v\n, got\n%v\n", key, last, v)
+						log.Fatalf("get wrong value, key %v, wanted:\n%v\n, got:\n%v\n", key, last, v)
 					}
 				}
 			}
@@ -508,14 +508,14 @@ func TestOnePartition3A(t *testing.T) {
 
 	p1, p2 := cfg.make_partition()
 	cfg.partition(p1, p2)
-
+	log.Printf("begin make client\n")
 	ckp1 := cfg.makeClient(p1)  // connect ckp1 to p1
 	ckp2a := cfg.makeClient(p2) // connect ckp2a to p2
 	ckp2b := cfg.makeClient(p2) // connect ckp2b to p2
-
+	log.Printf("begin Put key/value")
 	Put(cfg, ckp1, "1", "14")
 	check(cfg, t, ckp1, "1", "14")
-
+	log.Printf("end Put key/value")
 	cfg.end()
 
 	done0 := make(chan bool)

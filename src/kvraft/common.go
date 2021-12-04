@@ -6,13 +6,13 @@ import (
 	"time"
 )
 
-const (
-	OK             = "OK"
-	ErrNoKey       = "ErrNoKey"
-	ErrWrongLeader = "ErrWrongLeader"
-)
-
 type Operator int
+
+const (
+	OpGet = iota
+	OpPut
+	OpAppend
+)
 
 const (
 	Ok = iota
@@ -20,10 +20,11 @@ const (
 	ErrSessionExpired
 	ErrDuplicateOp
 	ErrTimeout
+	ErrNoneKey
 	ErrOperator
 )
 
-const OverTime = 200 * time.Millisecond
+const OverTime = 240 * time.Millisecond
 
 var ErrName = map[int]string{
 	Ok:                "OK",
@@ -31,6 +32,7 @@ var ErrName = map[int]string{
 	ErrSessionExpired: "ErrSessionExpired",
 	ErrDuplicateOp:    "ErrDuplicateOp",
 	ErrTimeout:        "ErrDuplicateOp",
+	ErrNoneKey:        "ErrNoneKey",
 	ErrOperator:       "ErrOperator",
 }
 
@@ -43,12 +45,14 @@ var (
 type CommandArgs struct {
 	ClientId  int64
 	LeaderId  int
-	CommnadId int
-	Request   Command
+	CommandId int
+	RequestOp Command
 }
 
 type CommandReply struct {
+	ClientId   int64
+	CommnadId  int
 	LeaderId   int
-	Value      string
 	StatusCode int
+	Value      string
 }

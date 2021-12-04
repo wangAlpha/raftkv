@@ -2,23 +2,16 @@ package kvraft
 
 import (
 	"crypto/rand"
-	"fmt"
 	"math/big"
 
 	"mit6.824/src/labrpc"
-)
-
-const (
-	OpGet = iota
-	OpPut
-	OpAppend
 )
 
 type Command struct {
 	Key       string
 	Value     string
 	OpType    Operator
-	ClientId  int
+	ClientId  int64
 	CommandId int
 }
 
@@ -66,25 +59,21 @@ func (clerk *Clerk) RequestOp(command *Command) string {
 	args := CommandArgs{
 		ClientId:  clerk.session_id,
 		LeaderId:  clerk.leader_id,
-		CommnadId: clerk.sequence_id,
-		Request:   *command,
+		CommandId: clerk.sequence_id,
+		RequestOp: *command,
 	}
 	for {
 		var reply CommandReply
 		ok := clerk.servers[clerk.leader_id].Call("KVServer.HandleRequest", &args, &reply)
-		INFO("Ok: %t, reply: %+v", ok, reply)
 		if ok && reply.StatusCode == Ok {
+			// INFO("Ok: %t, request: \n%+v, reply: \n%+v", ok, args.RequestOp, reply)
+			INFO("Request: %+v, Reply: %+v", *command, reply)
 			clerk.sequence_id += 1
 			return reply.Value
 		}
 		if reply.StatusCode == ErrNoneLeader {
-			// if reply.LeaderId != -1 {
-			// 	clerk.leader_id = reply.LeaderId
-			// } else {
 			clerk.leader_id = (clerk.leader_id + 1) % len(clerk.servers)
-			// }
 		}
-		fmt.Printf("request operator error: %s", ErrName[reply.StatusCode])
 	}
 }
 
@@ -92,7 +81,7 @@ func (clerk *Clerk) Get(key string) string {
 	return clerk.RequestOp(&Command{
 		Key:       key,
 		OpType:    OpGet,
-		ClientId:  int(clerk.session_id),
+		ClientId:  clerk.session_id,
 		CommandId: clerk.sequence_id,
 	})
 }
@@ -102,7 +91,7 @@ func (clerk *Clerk) PutAppend(key string, value string, op Operator) {
 		Key:       key,
 		Value:     value,
 		OpType:    op,
-		ClientId:  int(clerk.session_id),
+		ClientId:  clerk.session_id,
 		CommandId: clerk.sequence_id,
 	})
 }
