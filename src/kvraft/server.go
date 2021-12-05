@@ -75,6 +75,9 @@ func (server *KVServer) isDuplicate(client_id int64, cmd_id int) bool {
 func (server *KVServer) getNotifyChan(index int) chan CommandReply {
 	if _, ok := server.notifyChan[index]; !ok {
 		server.notifyChan[index] = make(chan CommandReply, 1)
+		// INFO("There don't exist notifyChan, %+v", server.notifyChan)
+	} else {
+		// INFO("There exist notifyChan, %+v", server.notifyChan)
 	}
 	return server.notifyChan[index]
 }
@@ -88,6 +91,7 @@ func (server *KVServer) removeNotifyChan(index int) {
 }
 
 func (server *KVServer) HandleRequest(args *CommandArgs, reply *CommandReply) {
+	// INFO("HandleRequest %v", *args)
 	command := args.RequestOp
 	if server.isDuplicate(args.ClientId, args.CommandId) && command.OpType != OpGet {
 		*reply = server.retrieveLastOpResult(args.ClientId)
@@ -101,10 +105,10 @@ func (server *KVServer) HandleRequest(args *CommandArgs, reply *CommandReply) {
 		return
 	}
 	server.mu.Lock()
-	ch := server.getNotifyChan(index)
+	server.getNotifyChan(index)
 	server.mu.Unlock()
 	select {
-	case msg := <-ch:
+	case msg := <-server.notifyChan[index]:
 		if command.ClientId == msg.ClientId && command.CommandId == msg.CommnadId {
 			INFO("ClientID:%d %d Op:%d result,  value: %s, code: %s", command.ClientId, command.CommandId, command.OpType, msg.Value, ErrName[msg.StatusCode])
 			*reply = msg
@@ -130,6 +134,7 @@ func (kv *KVServer) Kill() {
 // receiver operator and execute its.
 func (server *KVServer) handleCommand() {
 	for msg := range server.applyCh {
+		// INFO("get applyCh: %+v", msg)
 		// server.mu.Lock()
 		if msg.UseSnapshot {
 			w := new(bytes.Buffer)
@@ -152,6 +157,7 @@ func (server *KVServer) handleCommand() {
 			server.lastOpResult[cmd.ClientId] = reply
 			ch := server.getNotifyChan(msg.CommandIndex)
 			ch <- reply
+
 			if server.maxRaftState != -1 && server.raft.GetRaftStateSize() > server.maxRaftState {
 				w := new(bytes.Buffer)
 				e := labgob.NewEncoder(w)
