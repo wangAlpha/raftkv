@@ -22,7 +22,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 type KVStateMachine struct {
-	data map[string]string
+	Data map[string]string
 }
 
 type KVServer struct {
@@ -34,39 +34,39 @@ type KVServer struct {
 
 	maxRaftState int // snapshot if log grows this big
 	stateMachine *KVStateMachine
-	lastOpResult map[int64]CommandReply
+	LastOpResult map[int64]CommandReply
 	notifyChan   map[int]chan CommandReply
 }
 
 func NewKVStateMachine() *KVStateMachine {
-	return &KVStateMachine{data: make(map[string]string)}
+	return &KVStateMachine{Data: make(map[string]string)}
 }
 
 func (server *KVServer) ExecuteCommand(cmd Command) (string, int) {
 	if server.isDuplicate(cmd.ClientId, cmd.CommandId) && cmd.OpType != OpGet {
-		result := server.lastOpResult[cmd.ClientId]
+		result := server.LastOpResult[cmd.ClientId]
 		return result.Value, result.StatusCode
 	}
 	response, status_code := "Error", Ok
 	switch cmd.OpType {
 	case OpPut:
-		server.stateMachine.data[cmd.Key] = cmd.Value
+		server.stateMachine.Data[cmd.Key] = cmd.Value
 		response = "Put:" + cmd.Value
 	case OpGet:
-		if value, ok := server.stateMachine.data[cmd.Key]; ok {
+		if value, ok := server.stateMachine.Data[cmd.Key]; ok {
 			response = value
 		} else {
 			status_code = ErrNoneKey
 		}
 	case OpAppend:
-		server.stateMachine.data[cmd.Key] += cmd.Value
+		server.stateMachine.Data[cmd.Key] += cmd.Value
 		response = "Append:" + cmd.Value
 	}
 	return response, status_code
 }
 
 func (server *KVServer) isDuplicate(client_id int64, cmd_id int) bool {
-	if result, ok := server.lastOpResult[client_id]; ok && result.CommnadId >= cmd_id {
+	if result, ok := server.LastOpResult[client_id]; ok && result.CommnadId >= cmd_id {
 		return true
 	}
 	return false
@@ -83,7 +83,7 @@ func (server *KVServer) getNotifyChan(index int) chan CommandReply {
 }
 
 func (server *KVServer) retrieveLastOpResult(client_id int64) CommandReply {
-	return server.lastOpResult[client_id]
+	return server.LastOpResult[client_id]
 }
 
 func (server *KVServer) removeNotifyChan(index int) {
@@ -105,12 +105,12 @@ func (server *KVServer) HandleRequest(args *CommandArgs, reply *CommandReply) {
 		return
 	}
 	server.mu.Lock()
-	server.getNotifyChan(index)
+	ch := server.getNotifyChan(index)
 	server.mu.Unlock()
 	select {
-	case msg := <-server.notifyChan[index]:
+	case msg := <-ch:
 		if command.ClientId == msg.ClientId && command.CommandId == msg.CommnadId {
-			INFO("ClientID:%d %d Op:%d result,  value: %s, code: %s", command.ClientId, command.CommandId, command.OpType, msg.Value, ErrName[msg.StatusCode])
+			// INFO("ClientID:%d %d Op:%d result,  value: %s, code: %s", command.ClientId, command.CommandId, OpName[command.OpType], msg.Value, ErrName[msg.StatusCode])
 			*reply = msg
 		} else {
 			reply.Value = "ERROR"
@@ -134,18 +134,7 @@ func (kv *KVServer) Kill() {
 // receiver operator and execute its.
 func (server *KVServer) handleCommand() {
 	for msg := range server.applyCh {
-		// INFO("get applyCh: %+v", msg)
-		// server.mu.Lock()
-		if msg.UseSnapshot {
-			w := new(bytes.Buffer)
-			d := labgob.NewDecoder(w)
-			var last_log_index int // unused placeholder
-			var last_log_term int  // unused placeholder
-			d.Decode(&last_log_index)
-			d.Decode(&last_log_term)
-			d.Decode(&server.lastOpResult)
-			d.Decode(&server.stateMachine.data)
-		} else if msg.CommandValid {
+		if msg.CommandValid {
 			cmd := msg.Command.(Command)
 			value, status_code := server.ExecuteCommand(cmd)
 			reply := CommandReply{
@@ -154,19 +143,32 @@ func (server *KVServer) handleCommand() {
 				StatusCode: status_code,
 				Value:      value,
 			}
-			server.lastOpResult[cmd.ClientId] = reply
+			server.LastOpResult[cmd.ClientId] = reply
+			server.mu.Lock()
 			ch := server.getNotifyChan(msg.CommandIndex)
+			server.mu.Unlock()
 			ch <- reply
 
 			if server.maxRaftState != -1 && server.raft.GetRaftStateSize() > server.maxRaftState {
 				w := new(bytes.Buffer)
 				e := labgob.NewEncoder(w)
-				e.Encode(server.lastOpResult)
-				e.Encode(server.stateMachine.data)
+				e.Encode(server.LastOpResult)
+				e.Encode(server.stateMachine.Data)
+				// INFO("Encode: %+v", server.stateMachine.Data)
 				go server.raft.MakeRaftSnaphot(w.Bytes(), msg.CommandIndex)
 			}
+		} else if len(msg.Snapshot) > 0 {
+			INFO("handle command use snapshot")
+			r := bytes.NewReader(msg.Snapshot)
+			d := labgob.NewDecoder(r)
+			var last_log_index int // unused placeholder
+			var last_log_term int  // unused placeholder
+			d.Decode(&last_log_index)
+			d.Decode(&last_log_term)
+			d.Decode(&server.LastOpResult)
+			d.Decode(&server.stateMachine.Data)
+			// INFO("Decode: %+v", server.stateMachine.Data)
 		}
-		// server.mu.Unlock()
 	}
 }
 
@@ -186,14 +188,15 @@ func (server *KVServer) handleCommand() {
 //
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxRaftState int) *KVServer {
 	labgob.Register(Command{})
+	labgob.Register(CommandReply{})
 	server := &KVServer{
 		mu:           sync.Mutex{},
 		me:           me,
-		applyCh:      make(chan raft.ApplyMsg, 64),
+		applyCh:      make(chan raft.ApplyMsg, 128),
 		dead:         0,
 		maxRaftState: maxRaftState,
 		stateMachine: NewKVStateMachine(),
-		lastOpResult: make(map[int64]CommandReply),
+		LastOpResult: make(map[int64]CommandReply),
 		notifyChan:   make(map[int]chan CommandReply),
 	}
 	server.raft = raft.Make(servers, me, persister, server.applyCh)

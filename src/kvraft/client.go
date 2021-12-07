@@ -67,7 +67,7 @@ func (clerk *Clerk) RequestOp(command *Command) string {
 		ok := clerk.servers[clerk.leader_id].Call("KVServer.HandleRequest", &args, &reply)
 		if ok && reply.StatusCode == Ok {
 			// INFO("Ok: %t, request: \n%+v, reply: \n%+v", ok, args.RequestOp, reply)
-			// INFO("Request: %+v, Reply: %+v", *command, reply)
+			INFO("ClientID: %4d.%d, Op%s %s:%s", reply.ClientId, reply.CommnadId, OpName[args.RequestOp.OpType], args.RequestOp.Key, reply.Value)
 			clerk.sequence_id += 1
 			return reply.Value
 		}

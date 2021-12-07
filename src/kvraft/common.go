@@ -24,7 +24,7 @@ const (
 	ErrOperator
 )
 
-const OverTime = 240 * time.Millisecond
+const OverTime = 720 * time.Millisecond
 
 var ErrName = map[int]string{
 	Ok:                "OK",
@@ -36,9 +36,17 @@ var ErrName = map[int]string{
 	ErrOperator:       "ErrOperator",
 }
 
+var OpName = map[Operator]string{
+	OpGet:    "OpGet",
+	OpPut:    "OpPut",
+	OpAppend: "OpAppend",
+}
+
 var (
-	INFO = log.New(os.Stderr, "INFO:", log.Ltime|log.Lshortfile).Printf
-	WARN = log.New(os.Stderr, "WARN:", log.Ltime|log.Lshortfile).Printf
+	// LogFile, _ = os.OpenFile("output.log", os.O_CREATE|os.O_WRONLY, 0666)
+	LogFile = os.Stderr
+	INFO    = log.New(LogFile, "INFO ", log.Ltime|log.Lshortfile).Printf
+	WARN    = log.New(LogFile, "WARN ", log.Ltime|log.Lshortfile).Printf
 )
 
 // Put or Append
