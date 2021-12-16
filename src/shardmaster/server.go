@@ -167,8 +167,8 @@ func (master *ShardMaster) ConstructShardGroups(shards [NShards]int, groups map[
 			shardGroups[gid] = append(shardGroups[gid], i)
 		}
 	}
-	INFO("shards: %+v", shards)
-	INFO("shardGroups: %+v", shardGroups)
+
+	INFO("shards: %+v, shardGroups: %+v", shards, shardGroups)
 	return shardGroups
 }
 
@@ -191,7 +191,7 @@ func (master *ShardMaster) Join(servers map[int][]string) {
 func (master *ShardMaster) Move(shard int, gid int) {
 	lastConfig := master.configs[len(master.configs)-1]
 	newConfig := Config{len(master.configs), lastConfig.Shards, deepCopy(lastConfig.Groups)}
-
+	shard %= NShards
 	newConfig.Shards[shard] = gid
 
 	master.configs = append(master.configs, newConfig)
@@ -200,9 +200,32 @@ func (master *ShardMaster) Move(shard int, gid int) {
 func (master *ShardMaster) Leave(gids []int) {
 	lastConfig := master.configs[len(master.configs)-1]
 	newConfig := Config{len(master.configs), lastConfig.Shards, deepCopy(lastConfig.Groups)}
-	for gid := range gids {
+	// 将gids的serverList分给其他gid
+	shardGroups := master.ConstructShardGroups(newConfig.Shards, newConfig.Groups)
+
+	// 收集空闲下来的shard片段
+	freeShards := make([]int, 0)
+	for _, gid := range gids {
+		freeShards = append(freeShards, shardGroups[gid]...)
+		delete(shardGroups, gid)
 		delete(newConfig.Groups, gid)
 	}
+	INFO("Free shard groups: %v", freeShards)
+	// 将其分配给其他的gids组
+	for len(freeShards) > 0 {
+		leastShardGid := master.FindLeastShardGid(shardGroups)
+
+		freeShard := freeShards[len(freeShards)-1]
+		freeShards = freeShards[:len(freeShards)-1]
+		shardGroups[leastShardGid] = append(shardGroups[leastShardGid], freeShard)
+	}
+	INFO("shardGroups %+v", shardGroups)
+	for gid, shards := range shardGroups {
+		for _, shard := range shards {
+			newConfig.Shards[shard] = gid
+		}
+	}
+	INFO("After Leave: %v, newConfig: %+v", gids, newConfig)
 	master.configs = append(master.configs, newConfig)
 }
 
@@ -258,6 +281,8 @@ func (master *ShardMaster) Run() {
 //
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister) *ShardMaster {
 	labgob.Register(Command{})
+	labgob.Register(CommandReply{})
+	labgob.Register(OpResult{})
 	server := &ShardMaster{
 		mu:            sync.Mutex{},
 		me:            me,

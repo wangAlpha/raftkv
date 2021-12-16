@@ -23,3 +23,5 @@ src/main/mrsequential
 src/main/mrworker
 *.log
 */.DS_Store
+src/.DS_Store
+src/raft/.DS_Store

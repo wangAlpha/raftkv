@@ -89,7 +89,6 @@ type CommandReply struct {
 }
 
 var (
-	// LogFile, _ = os.OpenFile("output.log", os.O_CREATE|os.O_WRONLY, 0666)
 	LogFile = os.Stderr
 	INFO    = log.New(LogFile, "INFO ", log.Ltime|log.Lshortfile).Printf
 	WARN    = log.New(LogFile, "WARN ", log.Ltime|log.Lshortfile).Printf

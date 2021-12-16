@@ -117,7 +117,7 @@ func TestBasic(t *testing.T) {
 	INFO("Check4")
 	check(t, []int{gid2}, ck)
 	cfa[4] = ck.Query(-1)
-	
+
 	ck.Leave([]int{gid2})
 	cfa[5] = ck.Query(-1)
 
