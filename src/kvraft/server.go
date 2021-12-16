@@ -66,6 +66,8 @@ func (server *KVServer) ExecuteCommand(cmd Command) (string, int) {
 }
 
 func (server *KVServer) isDuplicate(client_id int64, cmd_id int) bool {
+	server.mu.Lock()
+	defer server.mu.Unlock()
 	if result, ok := server.LastOpResult[client_id]; ok && result.CommnadId >= cmd_id {
 		return true
 	}
@@ -143,8 +145,8 @@ func (server *KVServer) handleCommand() {
 				StatusCode: status_code,
 				Value:      value,
 			}
-			server.LastOpResult[cmd.ClientId] = reply
 			server.mu.Lock()
+			server.LastOpResult[cmd.ClientId] = reply
 			ch := server.getNotifyChan(msg.CommandIndex)
 			server.mu.Unlock()
 			ch <- reply

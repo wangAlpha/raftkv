@@ -1,12 +1,12 @@
 package shardmaster
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 )
 
 // import "time"
-import "fmt"
 
 func check(t *testing.T, groups []int, ck *Clerk) {
 	c := ck.Query(-1)
@@ -88,16 +88,18 @@ func TestBasic(t *testing.T) {
 
 	cfa := make([]Config, 6)
 	cfa[0] = ck.Query(-1)
-
+	INFO("Check1")
 	check(t, []int{}, ck)
 
 	var gid1 int = 1
 	ck.Join(map[int][]string{gid1: []string{"x", "y", "z"}})
+	INFO("Check2")
 	check(t, []int{gid1}, ck)
 	cfa[1] = ck.Query(-1)
 
 	var gid2 int = 2
 	ck.Join(map[int][]string{gid2: []string{"a", "b", "c"}})
+	INFO("Check3")
 	check(t, []int{gid1, gid2}, ck)
 	cfa[2] = ck.Query(-1)
 
@@ -112,9 +114,10 @@ func TestBasic(t *testing.T) {
 	}
 
 	ck.Leave([]int{gid1})
+	INFO("Check4")
 	check(t, []int{gid2}, ck)
 	cfa[4] = ck.Query(-1)
-
+	
 	ck.Leave([]int{gid2})
 	cfa[5] = ck.Query(-1)
 
@@ -193,8 +196,8 @@ func TestBasic(t *testing.T) {
 		go func(i int) {
 			defer func() { ch <- true }()
 			var gid int = gids[i]
-			var sid1 = fmt.Sprintf("s%da", gid)
-			var sid2 = fmt.Sprintf("s%db", gid)
+			sid1 := fmt.Sprintf("s%da", gid)
+			sid2 := fmt.Sprintf("s%db", gid)
 			cka[i].Join(map[int][]string{gid + 1000: []string{sid1}})
 			cka[i].Join(map[int][]string{gid: []string{sid2}})
 			cka[i].Leave([]int{gid + 1000})
@@ -211,11 +214,12 @@ func TestBasic(t *testing.T) {
 
 	c1 := ck.Query(-1)
 	for i := 0; i < 5; i++ {
-		var gid = int(npara + 1 + i)
+		gid := int(npara + 1 + i)
 		ck.Join(map[int][]string{gid: []string{
 			fmt.Sprintf("%da", gid),
 			fmt.Sprintf("%db", gid),
-			fmt.Sprintf("%db", gid)}})
+			fmt.Sprintf("%db", gid),
+		}})
 	}
 	c2 := ck.Query(-1)
 	for i := int(1); i <= npara; i++ {
@@ -324,7 +328,8 @@ func TestMulti(t *testing.T) {
 				gid: []string{
 					fmt.Sprintf("%da", gid),
 					fmt.Sprintf("%db", gid),
-					fmt.Sprintf("%dc", gid)},
+					fmt.Sprintf("%dc", gid),
+				},
 				gid + 1000: []string{fmt.Sprintf("%da", gid+1000)},
 				gid + 2000: []string{fmt.Sprintf("%da", gid+2000)},
 			})
@@ -341,7 +346,7 @@ func TestMulti(t *testing.T) {
 	c1 := ck.Query(-1)
 	m := make(map[int][]string)
 	for i := 0; i < 5; i++ {
-		var gid = npara + 1 + i
+		gid := npara + 1 + i
 		m[gid] = []string{fmt.Sprintf("%da", gid), fmt.Sprintf("%db", gid)}
 	}
 	ck.Join(m)

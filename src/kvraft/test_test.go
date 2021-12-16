@@ -508,11 +508,11 @@ func TestOnePartition3A(t *testing.T) {
 
 	p1, p2 := cfg.make_partition()
 	cfg.partition(p1, p2)
-	log.Printf("begin make client\n")
+	log.Printf("begin make client p1 %v p2%v\n", p1, p2)
 	ckp1 := cfg.makeClient(p1)  // connect ckp1 to p1
 	ckp2a := cfg.makeClient(p2) // connect ckp2a to p2
 	ckp2b := cfg.makeClient(p2) // connect ckp2b to p2
-	log.Printf("begin Put key/value")
+	INFO("begin Put key/value")
 	Put(cfg, ckp1, "1", "14")
 	check(cfg, t, ckp1, "1", "14")
 	log.Printf("end Put key/value")
@@ -647,7 +647,7 @@ func TestSnapshotRPC3B(t *testing.T) {
 	if sz > 8*maxraftstate {
 		t.Fatalf("logs were not trimmed (%v > 8*%v)", sz, maxraftstate)
 	}
-
+	INFO("logs were trimmed %d", sz)
 	// now make group that requires participation of
 	// lagging server, so that it has to catch up.
 	cfg.partition([]int{0, 2}, []int{1})
@@ -664,6 +664,7 @@ func TestSnapshotRPC3B(t *testing.T) {
 	// now everybody
 	cfg.partition([]int{0, 1, 2}, []int{})
 
+	INFO("now everybody")
 	Put(cfg, ck, "e", "E")
 	check(cfg, t, ck, "c", "C")
 	check(cfg, t, ck, "e", "E")

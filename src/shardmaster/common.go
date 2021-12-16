@@ -1,5 +1,10 @@
 package shardmaster
 
+import (
+	"log"
+	"os"
+)
+
 //
 // Master shard server: assigns shards to replication groups.
 //
@@ -29,45 +34,94 @@ type Config struct {
 }
 
 const (
-	OK = "OK"
+	Ok = iota
+	ErrNoneLeader
+	ErrTimeout
+	ErrWrongLeader
+	ErrDuplicateOp
 )
 
-type Err string
-
-type JoinArgs struct {
-	Servers map[int][]string // new GID -> servers mappings
+var StatusCodeMap = map[int]string{
+	Ok:             "OK",
+	ErrNoneLeader:  "ErrNoneLeader",
+	ErrTimeout:     "ErrTimeout",
+	ErrWrongLeader: "ErrWrongLeader",
+	ErrDuplicateOp: "ErrDuplicateOp",
 }
 
-type JoinReply struct {
-	WrongLeader bool
-	Err         Err
+const (
+	OpQuery = iota
+	OpJoin
+	OpLeave
+	OpMove
+)
+
+var OpName = map[int]string{
+	OpQuery: "Query",
+	OpJoin:  "Join",
+	OpLeave: "Leave",
+	OpMove:  "Move",
 }
 
-type LeaveArgs struct {
-	GIDs []int
+// var OpName[]string={"Query", "Join", "Leave", "Move"}
+
+type Command struct {
+	OpType  int
+	Servers map[int][]string // for Join
+	Num     int              // for Query, desired config number
+	GIDs    []int            // for Leave
+	Shard   int              // for Move
+	GID     int              // for Move
+
+	ClientId  int64
+	CommandId int64
 }
 
-type LeaveReply struct {
-	WrongLeader bool
-	Err         Err
+type CommandArgs struct {
+	Command   Command
+	ClientId  int64
+	RequestId int64
 }
 
-type MoveArgs struct {
-	Shard int
-	GID   int
+type CommandReply struct {
+	StatusCode int
+	Config     Config
 }
 
-type MoveReply struct {
-	WrongLeader bool
-	Err         Err
+var (
+	// LogFile, _ = os.OpenFile("output.log", os.O_CREATE|os.O_WRONLY, 0666)
+	LogFile = os.Stderr
+	INFO    = log.New(LogFile, "INFO ", log.Ltime|log.Lshortfile).Printf
+	WARN    = log.New(LogFile, "WARN ", log.Ltime|log.Lshortfile).Printf
+)
+
+func Min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
-type QueryArgs struct {
-	Num int // desired config number
+func Max(a, b int) int {
+	if a < b {
+		return b
+	}
+	return a
 }
 
-type QueryReply struct {
-	WrongLeader bool
-	Err         Err
-	Config      Config
+func All(list []int, f func(x int) bool) bool {
+	for _, e := range list {
+		if !f(e) {
+			return false
+		}
+	}
+	return true
+}
+
+func deepCopy(src map[int][]string) map[int][]string {
+	dst := map[int][]string{}
+	for key, values := range src {
+		dst[key] = values
+	}
+	return dst
 }

@@ -269,7 +269,7 @@ func (rf *Raft) ParseHeartbeatReply(server int, args *LogEntryArgs, reply *LogEn
 		rf.currentTerm = reply.Term
 		return
 	}
-	INFO("ID: %d=>%d reply: %+v, my log: %d last log: %d", rf.me, server, *reply, len(rf.log), rf.LastLogIndex())
+	// INFO("ID: %d=>%d reply: %+v, my log: %d last log: %d", rf.me, server, *reply, len(rf.log), rf.LastLogIndex())
 	if !reply.Success {
 		rf.nextIndex[server] = min(reply.NextTryIndex, rf.LastLogIndex())
 	} else {
@@ -279,7 +279,7 @@ func (rf *Raft) ParseHeartbeatReply(server int, args *LogEntryArgs, reply *LogEn
 		}
 	}
 	rf.UpdateCommitIndex()
-	INFO("ID: %d=>%d nextIndex: %+v", rf.me, server, rf.nextIndex)
+	// INFO("ID: %d=>%d nextIndex: %+v", rf.me, server, rf.nextIndex)
 }
 
 // Check follower and update Leader's commitIndex
@@ -330,7 +330,6 @@ func (rf *Raft) ResolveConflictLogs(args *LogEntryArgs, reply *LogEntryReply) {
 	}
 	baseIndex := rf.log[0].Index
 	if args.PrevLogIndex >= baseIndex && args.PrevLogTerm != rf.log[args.PrevLogIndex-baseIndex].Term {
-		// INFO("ID: %d last log: %+v ", rf.me, rf.log[rf.LastLogIndex()])
 		term := rf.log[args.PrevLogIndex-baseIndex].Term
 		for i := args.PrevLogIndex - 1; i >= baseIndex; i-- {
 			if term != rf.log[i-baseIndex].Term {
@@ -353,9 +352,9 @@ func (rf *Raft) ResolveConflictLogs(args *LogEntryArgs, reply *LogEntryReply) {
 }
 
 func (rf *Raft) ApplyLog() {
+	// FIXME
 	baseIndex := rf.log[0].Index
 	for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
-		// if rf.log[i-baseIndex].Command != nil {
 		command_valid := rf.log[i-baseIndex].Command != nil
 		msg := ApplyMsg{
 			CommandValid: command_valid,
@@ -399,11 +398,10 @@ func (rf *Raft) MakeRaftSnaphot(snapshot []byte, index int) {
 	defer rf.mu.Unlock()
 	base_index, last_index := rf.log[0].Index, rf.LastLogIndex()
 	if base_index >= index || last_index < index {
-		INFO("ERR: %d base_index: %+v, %d ", len(rf.log), rf.log[0], rf.LastLogIndex())
+		// INFO("ERR: %d base_index: %+v, %d ", len(rf.log), rf.log[0], rf.LastLogIndex())
 		return
 	}
-	INFO("Trim Log")
-	rf.TrimLog(index, rf.log[index-base_index].Term)
+	rf.TrimLog(rf.log[index-base_index].Index, rf.log[index-base_index].Term)
 
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
@@ -418,7 +416,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArg, reply *InstallSnapshot
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	defer rf.persist()
-	defer func() { INFO("ID:%d After InstallSnapshot, args: %+v log %+v", rf.me, *args, rf.log) }()
+	// defer func() { INFO("ID:%d After InstallSnapshot, args: %+v log %+v", rf.me, *args, rf.log) }()
 	reply.Term = rf.currentTerm
 	if args.Term < rf.currentTerm {
 		reply.Term = rf.currentTerm
@@ -511,7 +509,7 @@ func (rf *Raft) BroadcastHeartbeats() {
 				if rf.nextIndex[peer] <= rf.LastLogIndex() {
 					args.Entries = rf.log[rf.nextIndex[peer]-baseIndex:]
 				}
-				INFO("ID:%d=>%d %v %d %d", rf.me, peer, rf.nextIndex, rf.nextIndex[peer], args.PrevLogIndex)
+				// INFO("ID:%d=>%d %v %d %d", rf.me, peer, rf.nextIndex, rf.nextIndex[peer], args.PrevLogIndex)
 				go func(server int, args *LogEntryArgs) {
 					reply := &LogEntryReply{}
 					ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
@@ -520,7 +518,7 @@ func (rf *Raft) BroadcastHeartbeats() {
 					} else {
 						// INFO("ID: %d=>%d Failed to call Raft AppendEntries:%+v", rf.me, server, reply)
 					}
-					INFO("ID: %d=>%d, nextIndex: %+v", rf.me, server, rf.nextIndex)
+					// INFO("ID: %d=>%d, nextIndex: %+v", rf.me, server, rf.nextIndex)
 				}(peer, args)
 			} else {
 				rf.persist()
@@ -533,8 +531,8 @@ func (rf *Raft) BroadcastHeartbeats() {
 				args := &InstallSnapshotArg{
 					Term:              rf.currentTerm,
 					LeaderId:          rf.me,
-					LastIncludedIndex: last_included_index,
-					LastIncludedTerm:  last_included_term,
+					LastIncludedIndex: rf.log[0].Index,
+					LastIncludedTerm:  rf.log[0].Term,
 					Data:              snapshot,
 				}
 				go func(peer int, args *InstallSnapshotArg) {
@@ -554,18 +552,10 @@ func (rf *Raft) Kill() {
 }
 
 func (rf *Raft) LastLogIndex() int {
-	if len(rf.log) == 0 {
-		// return rf.log[0].Index
-		return -1
-	}
 	return rf.log[len(rf.log)-1].Index
 }
 
 func (rf *Raft) LastLogTerm() int {
-	if len(rf.log) == 0 {
-		// return rf.log[0].Term
-		return -1
-	}
 	return rf.log[len(rf.log)-1].Term
 }
 
