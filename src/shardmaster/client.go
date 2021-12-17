@@ -56,7 +56,7 @@ func (ck *Clerk) RequestOp(cmd Command) Config {
 		} else if reply.StatusCode != ErrDuplicateOp {
 			INFO("Request Err: %s", StatusCodeMap[reply.StatusCode])
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

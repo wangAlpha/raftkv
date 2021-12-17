@@ -62,6 +62,8 @@ func (clerk *Clerk) RequestOp(command *Command) string {
 		CommandId: clerk.sequence_id,
 		RequestOp: *command,
 	}
+	args.RequestOp.CommandId = args.CommandId
+	args.RequestOp.ClientId = args.ClientId
 	for {
 		var reply CommandReply
 		ok := clerk.servers[clerk.leader_id].Call("KVServer.HandleRequest", &args, &reply)

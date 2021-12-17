@@ -25,18 +25,19 @@ type ShardMaster struct {
 	configs       []Config // indexed by config num
 }
 
-func (master *ShardMaster) IsDuplicateRequest(args *CommandArgs) bool {
+func (master *ShardMaster) IsDuplicateRequest(clientId int64, cmdId int64) bool {
 	master.mu.Lock()
 	defer master.mu.Unlock()
-	if cmd_id, ok := master.lastOperation[args.ClientId]; ok && cmd_id >= args.RequestId {
+	if Id, ok := master.lastOperation[clientId]; ok && Id >= cmdId {
 		return false
 	}
-	master.lastOperation[args.ClientId] = args.RequestId
+	master.lastOperation[clientId] = cmdId
 	return true
 }
 
 func (master *ShardMaster) HandleRequest(args *CommandArgs, reply *CommandReply) {
-	if master.IsDuplicateRequest(args) {
+	// INFO("Handle Request: %v %v %v", args.RequestId, args.Command.CommandId, args.Command.OpType)
+	if master.IsDuplicateRequest(args.ClientId, args.RequestId) {
 		reply.StatusCode = ErrDuplicateOp
 		return
 	}
@@ -45,6 +46,7 @@ func (master *ShardMaster) HandleRequest(args *CommandArgs, reply *CommandReply)
 		reply.StatusCode = ErrNoneLeader
 		return
 	}
+
 	master.mu.Lock()
 	if _, ok := master.lastOpResult[cmd_index]; !ok {
 		master.lastOpResult[cmd_index] = make(chan OpResult)
@@ -57,7 +59,7 @@ func (master *ShardMaster) HandleRequest(args *CommandArgs, reply *CommandReply)
 		if op_result.Command.ClientId == args.ClientId && op_result.Command.CommandId == args.RequestId {
 			*reply = op_result.Result
 		}
-	case <-time.After(time.Millisecond * 400):
+	case <-time.After(time.Millisecond * 240):
 		reply.StatusCode = ErrTimeout
 	}
 	master.mu.Lock()
@@ -105,15 +107,11 @@ func (master *ShardMaster) FindGreatestShardGid(shardGroup map[int][]int) int {
 }
 
 func (master *ShardMaster) ReBalanceShards(shardGroup map[int][]int, shard [NShards]int) [NShards]int {
-	for {
-		// 判断是否平衡
-		if master.IsBalance(shardGroup) {
-			INFO("Now shardGroup is balance : %+v", shardGroup)
-			break
-		}
+	// 判断是否平衡
+	for !master.IsBalance(shardGroup) {
 		// 找到具有最少shard的gid
 		leastShardGid := master.FindLeastShardGid(shardGroup)
-		// 找到最多分片的gid
+		// 找到最多you分片的gid
 		greatestShardGid := master.FindGreatestShardGid(shardGroup)
 		// 将最多的shard的gid分分一部分给对应的gid
 		len := len(shardGroup[greatestShardGid])
@@ -121,6 +119,7 @@ func (master *ShardMaster) ReBalanceShards(shardGroup map[int][]int, shard [NSha
 		shardGroup[leastShardGid] = append(shardGroup[leastShardGid], moveShard)
 		shardGroup[greatestShardGid] = shardGroup[greatestShardGid][:len-1]
 	}
+	INFO("Now shardGroup is balance : %+v", shardGroup)
 	newShards := [NShards]int{}
 	// 将shards划分到newShard切片中
 	for gid, serverList := range shardGroup {
@@ -145,6 +144,8 @@ func (master *ShardMaster) IsBalance(shardGroups map[int][]int) bool {
 	return maxGroupLen-minGroupLen <= 1
 }
 
+// 根据现有shards构建一个集群分片组，groups->ShardsList
+// 假如第一次分片，则直接划分掉shards
 func (master *ShardMaster) ConstructShardGroups(shards [NShards]int, groups map[int][]string) map[int][]int {
 	shardGroups := map[int][]int{}
 	for gid := range groups {
@@ -175,7 +176,6 @@ func (master *ShardMaster) ConstructShardGroups(shards [NShards]int, groups map[
 // gid -> serverList
 func (master *ShardMaster) Join(servers map[int][]string) {
 	INFO("Join %+v", servers)
-
 	lastConfig := master.configs[len(master.configs)-1]
 	newConfig := Config{len(master.configs), lastConfig.Shards, deepCopy(lastConfig.Groups)}
 	for gid, serverList := range servers {
@@ -189,15 +189,18 @@ func (master *ShardMaster) Join(servers map[int][]string) {
 }
 
 func (master *ShardMaster) Move(shard int, gid int) {
+	INFO("Op Move shard: %d gid: %d", shard, gid)
 	lastConfig := master.configs[len(master.configs)-1]
 	newConfig := Config{len(master.configs), lastConfig.Shards, deepCopy(lastConfig.Groups)}
 	shard %= NShards
+	// shard += 1
 	newConfig.Shards[shard] = gid
 
 	master.configs = append(master.configs, newConfig)
 }
 
 func (master *ShardMaster) Leave(gids []int) {
+	INFO("Op Leave: %+v", gids)
 	lastConfig := master.configs[len(master.configs)-1]
 	newConfig := Config{len(master.configs), lastConfig.Shards, deepCopy(lastConfig.Groups)}
 	// 将gids的serverList分给其他gid
@@ -219,13 +222,12 @@ func (master *ShardMaster) Leave(gids []int) {
 		freeShards = freeShards[:len(freeShards)-1]
 		shardGroups[leastShardGid] = append(shardGroups[leastShardGid], freeShard)
 	}
-	INFO("shardGroups %+v", shardGroups)
 	for gid, shards := range shardGroups {
 		for _, shard := range shards {
 			newConfig.Shards[shard] = gid
 		}
 	}
-	INFO("After Leave: %v, newConfig: %+v", gids, newConfig)
+	INFO("Done Leave: %v, shardGroups: %+v, newConfig: %+v", gids, shardGroups, newConfig)
 	master.configs = append(master.configs, newConfig)
 }
 
@@ -240,10 +242,18 @@ func (master *ShardMaster) Run() {
 	for command := range master.applyCh {
 		// INFO("cmd: %+v", command)
 		if !command.CommandValid {
+			INFO("Check Command valid: %+v", command)
 			continue
 		}
 		reply := CommandReply{StatusCode: Ok}
 		cmd := command.Command.(Command)
+		if master.IsDuplicateRequest(cmd.ClientId, cmd.CommandId) {
+			INFO("Op Duplicate %+v", cmd)
+			continue
+		}
+		master.mu.Lock()
+		master.lastOperation[cmd.ClientId] = cmd.CommandId
+		master.mu.Unlock()
 		INFO("OP: %+v Num: %d GIDs: %v, Shard: %v GID:%v, Servers:%v",
 			OpName[cmd.OpType], cmd.Num, cmd.GIDs, cmd.Shard, cmd.GID, cmd.Servers)
 		switch cmd.OpType {
@@ -251,7 +261,7 @@ func (master *ShardMaster) Run() {
 			master.Join(cmd.Servers)
 			reply.Config = master.configs[len(master.configs)-1]
 		case OpMove:
-			master.Move(cmd.GID, cmd.Shard)
+			master.Move(cmd.Shard, cmd.GID)
 			reply.Config = master.configs[len(master.configs)-1]
 		case OpLeave:
 			master.Leave(cmd.GIDs)
