@@ -74,16 +74,18 @@ type Command struct {
 	GID     int              // for Move
 
 	ClientId  int64
-	CommandId int64
+	CommandId int
 }
 
 type CommandArgs struct {
 	Command   Command
 	ClientId  int64
-	RequestId int64
+	RequestId int
 }
 
 type CommandReply struct {
+	ClientId   int64
+	CommandId  int
 	StatusCode int
 	Config     Config
 }

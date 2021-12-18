@@ -20,50 +20,49 @@ type ShardMaster struct {
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
 
-	lastOperation map[int64]int64
-	lastOpResult  map[int]chan OpResult
-	configs       []Config // indexed by config num
+	lastOpResult map[int64]int
+	notifyChan   map[int]chan CommandReply
+	configs      []Config // indexed by config num
 }
 
-func (master *ShardMaster) IsDuplicateRequest(clientId int64, cmdId int64) bool {
-	master.mu.Lock()
-	defer master.mu.Unlock()
-	if Id, ok := master.lastOperation[clientId]; ok && Id >= cmdId {
-		return false
+func (master *ShardMaster) IsDuplicateRequest(clientId int64, cmdId int) bool {
+	// master.mu.Lock()
+	// defer master.mu.Unlock()
+	if requestId, ok := master.lastOpResult[clientId]; ok && cmdId <= requestId {
+		return true
 	}
-	master.lastOperation[clientId] = cmdId
-	return true
+	return false
 }
 
 func (master *ShardMaster) HandleRequest(args *CommandArgs, reply *CommandReply) {
-	// INFO("Handle Request: %v %v %v", args.RequestId, args.Command.CommandId, args.Command.OpType)
+	cmd := args.Command
 	if master.IsDuplicateRequest(args.ClientId, args.RequestId) {
-		reply.StatusCode = ErrDuplicateOp
+		// *reply = master.lastOpResult[args.ClientId]
+		INFO("Duplicate Request: %v %v %v", args.RequestId, args.RequestId, args.Command.OpType)
 		return
 	}
-	cmd_index, _, is_leader := master.rf.Start(args.Command)
+	cmdIndex, _, is_leader := master.rf.Start(cmd)
 	if !is_leader {
+		// INFO("NO LEADER")
 		reply.StatusCode = ErrNoneLeader
 		return
 	}
 
 	master.mu.Lock()
-	if _, ok := master.lastOpResult[cmd_index]; !ok {
-		master.lastOpResult[cmd_index] = make(chan OpResult)
+	if _, ok := master.notifyChan[cmdIndex]; !ok {
+		master.notifyChan[cmdIndex] = make(chan CommandReply, 1)
 	}
-	ch := master.lastOpResult[cmd_index]
 	master.mu.Unlock()
 
 	select {
-	case op_result := <-ch:
-		if op_result.Command.ClientId == args.ClientId && op_result.Command.CommandId == args.RequestId {
-			*reply = op_result.Result
-		}
+	case op_result := <-master.notifyChan[cmdIndex]:
+		INFO("Op Result: %+v", op_result)
+		*reply = op_result
 	case <-time.After(time.Millisecond * 240):
 		reply.StatusCode = ErrTimeout
 	}
 	master.mu.Lock()
-	delete(master.lastOpResult, cmd_index)
+	delete(master.notifyChan, cmdIndex)
 	master.mu.Unlock()
 }
 
@@ -240,7 +239,7 @@ func (master *ShardMaster) Query(num int) Config {
 
 func (master *ShardMaster) Run() {
 	for command := range master.applyCh {
-		// INFO("cmd: %+v", command)
+		INFO("cmd: %+v", command)
 		if !command.CommandValid {
 			INFO("Check Command valid: %+v", command)
 			continue
@@ -251,9 +250,7 @@ func (master *ShardMaster) Run() {
 			INFO("Op Duplicate %+v", cmd)
 			continue
 		}
-		master.mu.Lock()
-		master.lastOperation[cmd.ClientId] = cmd.CommandId
-		master.mu.Unlock()
+
 		INFO("OP: %+v Num: %d GIDs: %v, Shard: %v GID:%v, Servers:%v",
 			OpName[cmd.OpType], cmd.Num, cmd.GIDs, cmd.Shard, cmd.GID, cmd.Servers)
 		switch cmd.OpType {
@@ -272,14 +269,14 @@ func (master *ShardMaster) Run() {
 		}
 
 		master.mu.Lock()
-		if _, ok := master.lastOpResult[command.CommandIndex]; !ok {
-			master.lastOpResult[command.CommandIndex] = make(chan OpResult)
+		master.lastOpResult[cmd.ClientId] = cmd.CommandId
+		if _, ok := master.notifyChan[command.CommandIndex]; !ok {
+			master.notifyChan[command.CommandIndex] = make(chan CommandReply, 1)
 		}
-		ch := master.lastOpResult[command.CommandIndex]
+		ch := master.notifyChan[command.CommandIndex]
 		master.mu.Unlock()
-		result := OpResult{Command: cmd, Result: reply}
 
-		ch <- result
+		ch <- reply
 	}
 }
 
@@ -294,12 +291,12 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister)
 	labgob.Register(CommandReply{})
 	labgob.Register(OpResult{})
 	server := &ShardMaster{
-		mu:            sync.Mutex{},
-		me:            me,
-		applyCh:       make(chan raft.ApplyMsg),
-		lastOperation: map[int64]int64{},
-		lastOpResult:  map[int]chan OpResult{},
-		configs:       make([]Config, 1),
+		mu:           sync.Mutex{},
+		me:           me,
+		applyCh:      make(chan raft.ApplyMsg, 100),
+		lastOpResult: make(map[int64]int),
+		notifyChan:   make(map[int]chan CommandReply),
+		configs:      make([]Config, 1),
 	}
 	config := Config{
 		Num:    0,

@@ -124,12 +124,14 @@ func TestBasic(t *testing.T) {
 	fmt.Printf("  ... Passed\n")
 
 	fmt.Printf("Test: Historical queries ...\n")
-
+	INFO("nservers: %d, len(cfa): %d", nservers, len(cfa))
 	for s := 0; s < nservers; s++ {
 		cfg.ShutdownServer(s)
+		INFO("Shutdown Server: %d", s)
 		for i := 0; i < len(cfa); i++ {
 			c := ck.Query(cfa[i].Num)
 			check_same_config(t, c, cfa[i])
+			INFO("Check: %d, %d", s, i)
 		}
 		cfg.StartServer(s)
 		cfg.ConnectAll()

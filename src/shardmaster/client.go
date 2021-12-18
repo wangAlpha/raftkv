@@ -16,7 +16,7 @@ type Clerk struct {
 	servers    []*labrpc.ClientEnd
 	server_id  int
 	client_id  int64
-	command_id int64
+	command_id int
 }
 
 func nrand() int64 {
@@ -36,6 +36,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 }
 
 func (ck *Clerk) RequestOp(cmd Command) Config {
+	ck.command_id += 1
 	cmd.CommandId = ck.command_id
 	cmd.ClientId = ck.client_id
 	args := &CommandArgs{
@@ -47,8 +48,8 @@ func (ck *Clerk) RequestOp(cmd Command) Config {
 		server := ck.servers[ck.server_id]
 		var reply CommandReply
 		ok := server.Call("ShardMaster.HandleRequest", args, &reply)
+		INFO("ok: %t, Reply: %+v", ok, reply)
 		if ok && reply.StatusCode == Ok {
-			ck.command_id += 1
 			return reply.Config
 		}
 		if !ok || reply.StatusCode == ErrNoneLeader {
@@ -56,6 +57,7 @@ func (ck *Clerk) RequestOp(cmd Command) Config {
 		} else if reply.StatusCode != ErrDuplicateOp {
 			INFO("Request Err: %s", StatusCodeMap[reply.StatusCode])
 		}
+		// ck.server_id = (ck.server_id + 1) % len(ck.servers)
 		time.Sleep(100 * time.Millisecond)
 	}
 }
