@@ -6,12 +6,11 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"raftkv/src/labgob"
+	"raftkv/src/labrpc"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"mit6.824/src/labgob"
-	"mit6.824/src/labrpc"
 )
 
 type StateMachine int
@@ -85,7 +84,6 @@ type Raft struct {
 
 	state           int
 	leaderId        int // current lead id
-	chanStart       chan bool
 	chanVoteGranted chan bool
 	chanWinElect    chan bool
 	chanHeartbeat   chan bool
@@ -645,7 +643,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		log:         []LogEntry{{Term: 0, Index: 0}},
 
 		chanMsg:         applyCh,
-		chanStart:       make(chan bool, 128),
 		chanVoteGranted: make(chan bool, 128),
 		chanWinElect:    make(chan bool, 128),
 		chanHeartbeat:   make(chan bool, 128),

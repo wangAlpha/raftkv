@@ -4,14 +4,13 @@ import (
 	"fmt"
 	"io/ioutil"
 	"math/rand"
+	"raftkv/src/models"
+	"raftkv/src/porcupine"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"mit6.824/src/models"
-	"mit6.824/src/porcupine"
 )
 
 const linearizabilityCheckTimeout = 1 * time.Second

@@ -8,11 +8,10 @@ package main
 
 import (
 	"fmt"
+	"raftkv/src/mr"
 	"sort"
 	"strings"
 	"unicode"
-
-	"mit6.824/src/mr"
 )
 
 // The mapping function is called once for each piece of the input.

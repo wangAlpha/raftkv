@@ -6,18 +6,16 @@ import (
 	"math/big"
 	"math/rand"
 	"os"
+	"raftkv/src/labrpc"
+	"raftkv/src/raft"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"mit6.824/src/labrpc"
-
 	// import "log"
 	crand "crypto/rand"
-
-	"mit6.824/src/raft"
 )
 
 func randstring(n int) string {

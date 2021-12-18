@@ -53,13 +53,12 @@ import (
 	"bytes"
 	"log"
 	"math/rand"
+	"raftkv/src/labgob"
 	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"mit6.824/src/labgob"
 )
 
 type reqMsg struct {

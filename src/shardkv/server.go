@@ -1,18 +1,16 @@
 package shardkv
 
-// import "mit6.824/src/shardmaster"
+// import "raftkv/src/shardmaster"
 import (
+	"raftkv/src/labgob"
+	"raftkv/src/labrpc"
+	"raftkv/src/raft"
+	"raftkv/src/shardmaster"
 	"sync"
-
-	"mit6.824/src/labgob"
-	"mit6.824/src/labrpc"
-	"mit6.824/src/raft"
+	"time"
 )
 
-type Op struct { // Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
-}
+type Command struct{}
 
 type ShardKV struct {
 	mu           sync.Mutex
@@ -23,27 +21,58 @@ type ShardKV struct {
 	gid          int
 	masters      []*labrpc.ClientEnd
 	maxraftstate int // snapshot if log grows this big
+	mck          *shardmaster.Clerk
 
-	// Your definitions here.
+	chanNotify   map[int]chan CommandReply
+	lastOpResult map[int64]CommandReply
 }
 
-func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+func (kv *ShardKV) IsDuplicateRequest(clientId int64, cmdId int64) bool {
+	// TODO
+	return true
 }
 
-func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+// Client command RPC handlerk
+func (kv *ShardKV) HandleRequest(args *CommandArgs, reply *CommandReply) {
+	// check request whether is duplicate request
+	cmd := *args
+
+	index, _, isLeader := kv.rf.Start(cmd)
+	if !isLeader {
+		reply.StatusCode = ErrNoneLeader
+		return
+	}
+	kv.mu.Lock()
+	if _, ok := kv.chanNotify[index]; !ok {
+		kv.chanNotify[index] = make(chan CommandReply, 1)
+	}
+	kv.mu.Unlock()
+	select {
+	case reply := <-kv.chanNotify[index]:
+		shardmaster.INFO("reply: %+v", reply)
+	case <-time.After(500 * time.Millisecond):
+		reply.StatusCode = ErrTimeout
+	}
+	kv.mu.Lock()
+	delete(kv.chanNotify, index)
+	kv.mu.Unlock()
 }
 
-//
-// the tester calls Kill() when a ShardKV instance won't
-// be needed again. you are not required to do anything
-// in Kill(), but it might be convenient to (for example)
-// turn off debug output from this instance.
-//
 func (kv *ShardKV) Kill() {
 	kv.rf.Kill()
-	// Your code here, if desired.
+}
+
+func (kv *ShardKV) Run() {
+	for cmd := range kv.applyCh {
+		// 
+	}
+}
+
+func (kv *ShardKV) FetchConfig(syncTime time.Duration) {
+	for {
+		// fetch latest config
+		time.Sleep(syncTime * time.Millisecond)
+	}
 }
 
 //
@@ -74,25 +103,29 @@ func (kv *ShardKV) Kill() {
 // StartServer() must return quickly, so it should start goroutines
 // for any long-running work.
 //
-func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int, gid int, masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *ShardKV {
+func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
+	maxraftstate int, gid int, masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *ShardKV {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	labgob.Register(Op{})
+	labgob.Register(Command{})
+	labgob.Register(CommandArgs{})
+	labgob.Register(CommandReply{})
 
-	kv := new(ShardKV)
-	kv.me = me
-	kv.maxraftstate = maxraftstate
-	kv.make_end = make_end
-	kv.gid = gid
-	kv.masters = masters
-
-	// Your initialization code here.
-
-	// Use something like this to talk to the shardmaster:
-	// kv.mck = shardmaster.MakeClerk(kv.masters)
-
-	kv.applyCh = make(chan raft.ApplyMsg)
+	kv := &ShardKV{
+		me:           me,
+		maxraftstate: maxraftstate,
+		make_end:     make_end,
+		gid:          gid,
+		masters:      masters,
+		applyCh:      make(chan raft.ApplyMsg, 128),
+		mck:          shardmaster.MakeClerk(masters),
+	}
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
+	// start a command coroutine
+	go kv.Run()
+	// start a fetch config coroutine
+	go kv.FetchConfig(100)
+	// start a k/v migrate coroutine
 	return kv
 }

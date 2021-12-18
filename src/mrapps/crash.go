@@ -12,12 +12,11 @@ import (
 	crand "crypto/rand"
 	"math/big"
 	"os"
+	"raftkv/src/mr"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"mit6.824/src/mr"
 )
 
 func maybeCrash() {

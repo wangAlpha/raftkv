@@ -3,8 +3,7 @@ package kvraft
 import (
 	"crypto/rand"
 	"math/big"
-
-	"mit6.824/src/labrpc"
+	"raftkv/src/labrpc"
 )
 
 type Command struct {

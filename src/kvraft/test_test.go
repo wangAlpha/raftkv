@@ -5,15 +5,14 @@ import (
 	"io/ioutil"
 	"log"
 	"math/rand"
+	"raftkv/src/models"
+	"raftkv/src/porcupine"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"mit6.824/src/models"
-	"mit6.824/src/porcupine"
 )
 
 // The tester generously allows solutions to complete elections in one second

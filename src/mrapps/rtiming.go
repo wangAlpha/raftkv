@@ -11,10 +11,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"raftkv/src/mr"
 	"syscall"
 	"time"
-
-	"mit6.824/src/mr"
 )
 
 func nparallel(phase string) int {

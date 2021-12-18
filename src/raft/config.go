@@ -14,12 +14,11 @@ import (
 	"log"
 	"math/big"
 	"math/rand"
+	"raftkv/src/labrpc"
 	"runtime"
 	"sync"
 	"testing"
 	"time"
-
-	"mit6.824/src/labrpc"
 
 	crand "crypto/rand"
 )

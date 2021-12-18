@@ -1,5 +1,7 @@
 package shardkv
 
+import "raftkv/src/shardmaster"
+
 //
 // Sharded key/value server.
 // Lots of replica groups, each running op-at-a-time paxos.
@@ -14,31 +16,31 @@ const (
 	ErrNoKey       = "ErrNoKey"
 	ErrWrongGroup  = "ErrWrongGroup"
 	ErrWrongLeader = "ErrWrongLeader"
+	ErrNoneLeader  = "ErrNoneLeader"
+	ErrTimeout     = "ErrTimeout"
+)
+
+const (
+	OpGet = iota
+	OpPut
+	OpAppend
+	OpPutAppend
 )
 
 type Err string
 
-// Put or Append
-type PutAppendArgs struct {
-	// You'll have to add definitions here.
-	Key   string
-	Value string
-	Op    string // "Put" or "Append"
-	// You'll have to add definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+type CommandArgs struct {
+	OpType int
+	Key    string
+	Value  string
+
+	RequestId int
+	ClientId  int64
 }
 
-type PutAppendReply struct {
-	Err Err
+type CommandReply struct {
+	StatusCode Err
+	Value      string
 }
 
-type GetArgs struct {
-	Key string
-	// You'll have to add definitions here.
-}
-
-type GetReply struct {
-	Err   Err
-	Value string
-}
+var INFO = shardmaster.INFO

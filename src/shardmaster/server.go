@@ -1,12 +1,11 @@
 package shardmaster
 
 import (
+	"raftkv/src/labgob"
+	"raftkv/src/labrpc"
+	"raftkv/src/raft"
 	"sync"
 	"time"
-
-	"mit6.824/src/labgob"
-	"mit6.824/src/labrpc"
-	"mit6.824/src/raft"
 )
 
 type OpResult struct {

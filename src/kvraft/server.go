@@ -3,13 +3,12 @@ package kvraft
 import (
 	"bytes"
 	"log"
+	"raftkv/src/labgob"
+	"raftkv/src/labrpc"
+	"raftkv/src/raft"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"mit6.824/src/labgob"
-	"mit6.824/src/labrpc"
-	"mit6.824/src/raft"
 )
 
 const Debug = 0

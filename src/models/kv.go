@@ -2,9 +2,8 @@ package models
 
 import (
 	"fmt"
+	"raftkv/src/porcupine"
 	"sort"
-
-	"mit6.824/src/porcupine"
 )
 
 type KvInput struct {

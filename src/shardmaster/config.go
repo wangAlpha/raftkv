@@ -1,19 +1,18 @@
 package shardmaster
 
 import (
+	"encoding/base64"
+	"math/rand"
 	"os"
+	"raftkv/src/labrpc"
+	"raftkv/src/raft"
+	"runtime"
+	"sync"
 	"testing"
-
-	"mit6.824/src/labrpc"
-	"mit6.824/src/raft"
+	"time"
 
 	// import "log"
 	crand "crypto/rand"
-	"encoding/base64"
-	"math/rand"
-	"runtime"
-	"sync"
-	"time"
 )
 
 func randstring(n int) string {

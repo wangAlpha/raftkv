@@ -6,4 +6,4 @@ Mit 6.824 projects
   - [x] Lab3
   - [x] Lab4
     - [x] LabA
-    - [x] LabB
+    - [ ] LabB

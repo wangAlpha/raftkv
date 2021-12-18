@@ -7,9 +7,8 @@ package shardmaster
 import (
 	"crypto/rand"
 	"math/big"
+	"raftkv/src/labrpc"
 	"time"
-
-	"mit6.824/src/labrpc"
 )
 
 type Clerk struct {

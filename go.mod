@@ -1,3 +1,3 @@
-module mit6.824
+module raftkv
 
-go 1.17
+go 1.18

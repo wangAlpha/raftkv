@@ -7,11 +7,10 @@ package main
 //
 
 import (
+	"raftkv/src/mr"
 	"strconv"
 	"strings"
 	"unicode"
-
-	"mit6.824/src/mr"
 )
 
 //

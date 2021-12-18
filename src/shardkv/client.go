@@ -11,10 +11,9 @@ package shardkv
 import (
 	"crypto/rand"
 	"math/big"
+	"raftkv/src/labrpc"
+	"raftkv/src/shardmaster"
 	"time"
-
-	"mit6.824/src/labrpc"
-	"mit6.824/src/shardmaster"
 )
 
 //
@@ -39,10 +38,12 @@ func nrand() int64 {
 }
 
 type Clerk struct {
-	sm       *shardmaster.Clerk
-	config   shardmaster.Config
-	make_end func(string) *labrpc.ClientEnd
-	// You will have to modify this struct.
+	ShardMaster *shardmaster.Clerk
+	Config      shardmaster.Config
+	MakeEnd     func(string) *labrpc.ClientEnd
+
+	RequestId int
+	ClientId  int64
 }
 
 //
@@ -55,11 +56,13 @@ type Clerk struct {
 // send RPCs.
 //
 func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *Clerk {
-	ck := new(Clerk)
-	ck.sm = shardmaster.MakeClerk(masters)
-	ck.make_end = make_end
-	// You'll have to add code here.
-	return ck
+	return &Clerk{
+		ShardMaster: shardmaster.MakeClerk(masters),
+		Config:      shardmaster.Config{},
+		MakeEnd:     make_end,
+		RequestId:   0,
+		ClientId:    nrand(),
+	}
 }
 
 //
@@ -68,23 +71,24 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 // keeps trying forever in the face of all other errors.
 // You will have to modify this function.
 //
-func (ck *Clerk) Get(key string) string {
-	args := GetArgs{}
-	args.Key = key
-
+func (ck *Clerk) RequestOp(args *CommandArgs) string {
+	ck.RequestId++
+	args.RequestId = ck.RequestId
+	args.ClientId = ck.ClientId
 	for {
-		shard := key2shard(key)
-		gid := ck.config.Shards[shard]
-		if servers, ok := ck.config.Groups[gid]; ok {
+		shard := key2shard(args.Key)
+		gid := ck.Config.Shards[shard]
+		if servers, ok := ck.Config.Groups[gid]; ok {
 			// try each server for the shard.
 			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[si])
-				var reply GetReply
-				ok := srv.Call("ShardKV.Get", &args, &reply)
-				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
+				srv := ck.MakeEnd(servers[si])
+				var reply CommandReply
+				ok := srv.Call("ShardKV.HandleRequest", &args, &reply)
+
+				if ok && (reply.StatusCode == OK || reply.StatusCode == ErrNoKey) {
 					return reply.Value
 				}
-				if ok && (reply.Err == ErrWrongGroup) {
+				if ok && (reply.StatusCode == ErrWrongGroup) {
 					break
 				}
 				// ... not ok, or ErrWrongLeader
@@ -92,49 +96,24 @@ func (ck *Clerk) Get(key string) string {
 		}
 		time.Sleep(100 * time.Millisecond)
 		// ask master for the latest configuration.
-		ck.config = ck.sm.Query(-1)
+		ck.Config = ck.ShardMaster.Query(-1)
 	}
 
 	return ""
 }
 
-//
-// shared by Put and Append.
-// You will have to modify this function.
-//
-func (ck *Clerk) PutAppend(key string, value string, op string) {
-	args := PutAppendArgs{}
-	args.Key = key
-	args.Value = value
-	args.Op = op
-
-	for {
-		shard := key2shard(key)
-		gid := ck.config.Shards[shard]
-		if servers, ok := ck.config.Groups[gid]; ok {
-			for si := 0; si < len(servers); si++ {
-				srv := ck.make_end(servers[si])
-				var reply PutAppendReply
-				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
-				if ok && reply.Err == OK {
-					return
-				}
-				if ok && reply.Err == ErrWrongGroup {
-					break
-				}
-				// ... not ok, or ErrWrongLeader
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-		// ask master for the latest configuration.
-		ck.config = ck.sm.Query(-1)
-	}
-}
-
 func (ck *Clerk) Put(key string, value string) {
-	ck.PutAppend(key, value, "Put")
+	ck.RequestOp(&CommandArgs{
+		OpType: OpPut,
+		Key:    key,
+		Value:  value,
+	})
 }
 
 func (ck *Clerk) Append(key string, value string) {
-	ck.PutAppend(key, value, "Append")
+	ck.RequestOp(&CommandArgs{
+		OpType: OpAppend,
+		Key:    key,
+		Value:  value,
+	})
 }
