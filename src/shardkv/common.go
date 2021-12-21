@@ -24,8 +24,20 @@ const (
 	OpGet = iota
 	OpPut
 	OpAppend
-	OpPutAppend
+
+	OpConfig
+	OpMitigate
+	OpGc
 )
+
+var OpName = map[int]string{
+	OpGet:      "Get",
+	OpPut:      "Put",
+	OpAppend:   "Append",
+	OpConfig:   "Config",
+	OpMitigate: "Mitigate",
+	OpGc:       "Gc",
+}
 
 type Err string
 
@@ -43,4 +55,7 @@ type CommandReply struct {
 	Value      string
 }
 
-var INFO = shardmaster.INFO
+var (
+	INFO = shardmaster.INFO
+	WARN = shardmaster.WARN
+)

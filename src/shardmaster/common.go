@@ -92,8 +92,8 @@ type CommandReply struct {
 
 var (
 	LogFile = os.Stderr
-	INFO    = log.New(LogFile, "INFO ", log.Ltime|log.Lshortfile).Printf
-	WARN    = log.New(LogFile, "WARN ", log.Ltime|log.Lshortfile).Printf
+	INFO    = log.New(LogFile, "INFO ", log.Ltime|log.Llongfile).Printf
+	WARN    = log.New(LogFile, "WARN ", log.Ltime|log.Llongfile).Printf
 )
 
 func Min(a, b int) int {

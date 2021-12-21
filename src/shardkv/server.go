@@ -13,30 +13,38 @@ import (
 type Command struct{}
 
 type ShardKV struct {
-	mu           sync.Mutex
+	mu           sync.RWMutex
 	me           int
 	rf           *raft.Raft
 	applyCh      chan raft.ApplyMsg
 	make_end     func(string) *labrpc.ClientEnd
 	gid          int
 	masters      []*labrpc.ClientEnd
-	maxraftstate int // snapshot if log grows this big
+	maxRaftState int // snapshot if log grows this big
 	mck          *shardmaster.Clerk
+	config       shardmaster.Config
+	data         map[string]string
 
 	chanNotify   map[int]chan CommandReply
 	lastOpResult map[int64]CommandReply
+	lastRequest  map[int64]int
 }
 
-func (kv *ShardKV) IsDuplicateRequest(clientId int64, cmdId int64) bool {
-	// TODO
-	return true
+func (kv *ShardKV) isDuplicateRequest(clientId int64, cmdId int) bool {
+	kv.mu.RLock()
+	kv.mu.RUnlock()
+	if id, ok := kv.lastRequest[clientId]; ok && id >= cmdId {
+		return true
+	}
+	return false
 }
 
 // Client command RPC handlerk
 func (kv *ShardKV) HandleRequest(args *CommandArgs, reply *CommandReply) {
-	// check request whether is duplicate request
 	cmd := *args
-
+	if kv.isDuplicateRequest(cmd.ClientId, cmd.RequestId) {
+		return
+	}
 	index, _, isLeader := kv.rf.Start(cmd)
 	if !isLeader {
 		reply.StatusCode = ErrNoneLeader
@@ -48,8 +56,9 @@ func (kv *ShardKV) HandleRequest(args *CommandArgs, reply *CommandReply) {
 	}
 	kv.mu.Unlock()
 	select {
-	case reply := <-kv.chanNotify[index]:
-		shardmaster.INFO("reply: %+v", reply)
+	case *reply = <-kv.chanNotify[index]:
+		// TODO: CHECK REPLY
+		INFO("reply: %+v", *reply)
 	case <-time.After(500 * time.Millisecond):
 		reply.StatusCode = ErrTimeout
 	}
@@ -62,16 +71,78 @@ func (kv *ShardKV) Kill() {
 	kv.rf.Kill()
 }
 
-func (kv *ShardKV) Run() {
-	for cmd := range kv.applyCh {
-		// 
+// handle command
+func (kv *ShardKV) handleCommand() {
+	for msg := range kv.applyCh {
+		cmd := msg.Command.(CommandArgs)
+		var reply CommandReply
+
+		if msg.CommandValid {
+			switch cmd.OpType {
+			case OpPut:
+				kv.data[cmd.Key] = cmd.Value
+				reply.Value = cmd.Value
+				reply.StatusCode = OK
+			case OpGet:
+				var value string
+				if _, ok := kv.data[cmd.Key]; !ok {
+					value = ""
+				} else {
+					value = kv.data[cmd.Key]
+				}
+				reply.Value = value
+				reply.StatusCode = OK
+			case OpAppend:
+				kv.data[cmd.Key] += cmd.Value
+				reply.Value = kv.data[cmd.Key]
+				reply.StatusCode = OK
+			case OpConfig:
+				// TODO: Update config
+				// reply.Value = kv.data[cmd.Key]
+				reply.StatusCode = OK
+			case OpMitigate:
+				reply.StatusCode = OK
+				// TODO: Mitigate data
+			case OpGc:
+				reply.StatusCode = OK
+				// TODO: Garbage collection
+			}
+			kv.mu.RLock()
+			if _, ok := kv.chanNotify[msg.CommandIndex]; !ok {
+				kv.chanNotify[msg.CommandIndex] = make(chan CommandReply, 1)
+			}
+			ch := kv.chanNotify[msg.CommandIndex]
+			kv.mu.RUnlock()
+			ch <- reply
+			if kv.maxRaftState != -1 && kv.maxRaftState < kv.rf.GetRaftStateSize() {
+				// TODO: Make snapshot
+				INFO("Make snapshot files")
+			}
+		} else if len(msg.Snapshot) > 0 {
+			INFO("Receive snapshot msg")
+			// TODO:
+		}
 	}
 }
 
-func (kv *ShardKV) FetchConfig(syncTime time.Duration) {
+func (kv *ShardKV) fetchConfig(syncTime time.Duration) {
 	for {
-		// fetch latest config
+		// if _, isLeader := kv.rf.GetState(); isLeader {
+		// 	config := kv.mck.Query(-1)
+		// 	kv.mu.RLock()
+		// 	if config.Num != kv.config.Num {
+		// 		index, _, isLeader := kv.rf.Start(config)
+		// 		INFO("index: %d, isLeader: %t", index, isLeader)
+		// 	}
+		// 	kv.mu.RUnlock()
+		// }
 		time.Sleep(syncTime * time.Millisecond)
+	}
+}
+
+func (kv *ShardKV) migrateData() {
+	for {
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -104,7 +175,7 @@ func (kv *ShardKV) FetchConfig(syncTime time.Duration) {
 // for any long-running work.
 //
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
-	maxraftstate int, gid int, masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *ShardKV {
+	maxRaftState int, gid int, masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *ShardKV {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Command{})
@@ -112,20 +183,26 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	labgob.Register(CommandReply{})
 
 	kv := &ShardKV{
+		mu:           sync.RWMutex{},
 		me:           me,
-		maxraftstate: maxraftstate,
+		applyCh:      make(chan raft.ApplyMsg, 128),
 		make_end:     make_end,
 		gid:          gid,
 		masters:      masters,
-		applyCh:      make(chan raft.ApplyMsg, 128),
+		maxRaftState: maxRaftState,
 		mck:          shardmaster.MakeClerk(masters),
+		config:       shardmaster.Config{},
+		data:         make(map[string]string, 1),
+		chanNotify:   map[int]chan CommandReply{},
+		lastOpResult: map[int64]CommandReply{},
 	}
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// start a command coroutine
-	go kv.Run()
+	go kv.handleCommand()
 	// start a fetch config coroutine
-	go kv.FetchConfig(100)
+	go kv.fetchConfig(100)
 	// start a k/v migrate coroutine
+	go kv.migrateData()
 	return kv
 }

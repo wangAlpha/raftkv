@@ -41,9 +41,9 @@ type Clerk struct {
 	ShardMaster *shardmaster.Clerk
 	Config      shardmaster.Config
 	MakeEnd     func(string) *labrpc.ClientEnd
-
-	RequestId int
-	ClientId  int64
+	LeaderId    map[int]int
+	RequestId   int
+	ClientId    int64
 }
 
 //
@@ -56,10 +56,13 @@ type Clerk struct {
 // send RPCs.
 //
 func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *Clerk {
+	shardMaster := shardmaster.MakeClerk(masters)
+	config := shardMaster.Query(-1)
 	return &Clerk{
-		ShardMaster: shardmaster.MakeClerk(masters),
-		Config:      shardmaster.Config{},
+		ShardMaster: shardMaster,
+		Config:      config,
 		MakeEnd:     make_end,
+		LeaderId:    make(map[int]int, 1),
 		RequestId:   0,
 		ClientId:    nrand(),
 	}
@@ -72,20 +75,22 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 // You will have to modify this function.
 //
 func (ck *Clerk) RequestOp(args *CommandArgs) string {
-	ck.RequestId++
+	INFO("Request Command %d %+v %v", args.RequestId, OpName[args.OpType], args.Value)
 	args.RequestId = ck.RequestId
 	args.ClientId = ck.ClientId
 	for {
 		shard := key2shard(args.Key)
 		gid := ck.Config.Shards[shard]
-		if servers, ok := ck.Config.Groups[gid]; ok {
+		if servers, ok := ck.Config.Groups[gid]; ok && gid != 0 {
 			// try each server for the shard.
 			for si := 0; si < len(servers); si++ {
 				srv := ck.MakeEnd(servers[si])
 				var reply CommandReply
-				ok := srv.Call("ShardKV.HandleRequest", &args, &reply)
-
+				ok := srv.Call("ShardKV.HandleRequest", args, &reply)
+				INFO("ok: %t, reply: %+v", ok, reply)
 				if ok && (reply.StatusCode == OK || reply.StatusCode == ErrNoKey) {
+					ck.LeaderId[gid] = si
+					ck.RequestId++
 					return reply.Value
 				}
 				if ok && (reply.StatusCode == ErrWrongGroup) {
@@ -100,6 +105,14 @@ func (ck *Clerk) RequestOp(args *CommandArgs) string {
 	}
 
 	return ""
+}
+
+func (ck *Clerk) Get(key string) string {
+	return ck.RequestOp(&CommandArgs{
+		OpType: OpGet,
+		Key:    key,
+		Value:  "",
+	})
 }
 
 func (ck *Clerk) Put(key string, value string) {
