@@ -107,12 +107,13 @@ func TestJoinLeave(t *testing.T) {
 		va[i] = randstring(5)
 		ck.Put(ka[i], va[i])
 	}
+	INFO("CHECK 1")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 	}
 
 	cfg.join(1)
-
+	INFO("CHECK 2")
 	for i := 0; i < n; i++ {
 		check(t, ck, ka[i], va[i])
 		x := randstring(5)

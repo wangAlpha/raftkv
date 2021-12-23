@@ -75,25 +75,36 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 // You will have to modify this function.
 //
 func (ck *Clerk) RequestOp(args *CommandArgs) string {
-	INFO("Request Command %d %+v %v", args.RequestId, OpName[args.OpType], args.Value)
+	INFO("Request Command %d %+v %v %v", args.RequestId, OpName[args.OpType], args.Key, args.Value)
 	args.RequestId = ck.RequestId
 	args.ClientId = ck.ClientId
 	for {
 		shard := key2shard(args.Key)
+		for gid := range ck.Config.Shards {
+			if _, ok := ck.LeaderId[gid]; !ok {
+				ck.LeaderId[gid] = 0
+			}
+		}
 		gid := ck.Config.Shards[shard]
-		if servers, ok := ck.Config.Groups[gid]; ok && gid != 0 {
+		if servers, ok := ck.Config.Groups[gid]; ok {
 			// try each server for the shard.
-			for si := 0; si < len(servers); si++ {
-				srv := ck.MakeEnd(servers[si])
+			oldLeader := ck.LeaderId[gid]
+			leaderId := oldLeader
+			for {
+				srv := ck.MakeEnd(servers[leaderId])
 				var reply CommandReply
 				ok := srv.Call("ShardKV.HandleRequest", args, &reply)
-				INFO("ok: %t, reply: %+v", ok, reply)
+				INFO("Op: %v Id: %d ok: %t, reply: %+v ", OpName[args.OpType], args.RequestId, ok, reply)
 				if ok && (reply.StatusCode == OK || reply.StatusCode == ErrNoKey) {
-					ck.LeaderId[gid] = si
+					ck.LeaderId[gid] = leaderId
 					ck.RequestId++
 					return reply.Value
 				}
 				if ok && (reply.StatusCode == ErrWrongGroup) {
+					break
+				}
+				leaderId = (leaderId + 1) % len(servers)
+				if oldLeader == leaderId {
 					break
 				}
 				// ... not ok, or ErrWrongLeader

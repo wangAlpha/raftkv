@@ -25,8 +25,7 @@ const (
 	OpPut
 	OpAppend
 
-	OpConfig
-	OpMitigate
+	OpReConfig
 	OpGc
 )
 
@@ -34,8 +33,7 @@ var OpName = map[int]string{
 	OpGet:      "Get",
 	OpPut:      "Put",
 	OpAppend:   "Append",
-	OpConfig:   "Config",
-	OpMitigate: "Mitigate",
+	OpReConfig: "ReConfig",
 	OpGc:       "Gc",
 }
 
@@ -45,6 +43,7 @@ type CommandArgs struct {
 	OpType int
 	Key    string
 	Value  string
+	Config shardmaster.Config
 
 	RequestId int
 	ClientId  int64
@@ -53,6 +52,26 @@ type CommandArgs struct {
 type CommandReply struct {
 	StatusCode Err
 	Value      string
+}
+
+type MigrateArgs struct {
+	Num    int
+	Shards int
+}
+
+type MigrateReply struct {
+	StatusCode   Err
+	Data         [shardmaster.NShards]map[string]string
+	RequstRecord map[int64]int
+}
+
+type GcArgs struct {
+	Num     int
+	ShardId int
+}
+
+type GcReply struct {
+	StatusCode Err
 }
 
 var (
