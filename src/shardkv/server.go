@@ -1,6 +1,7 @@
 package shardkv
 
 import (
+	"bytes"
 	"raftkv/src/labgob"
 	"raftkv/src/labrpc"
 	"raftkv/src/raft"
@@ -118,12 +119,11 @@ func (kv *ShardKV) HandleRequest(args *CommandArgs, reply *CommandReply) {
 	select {
 	case *reply = <-ch:
 		if args.ClientId == reply.ClientId && args.RequestId == reply.RequestId {
-			// TODO: CHECK REPLY
 			INFO("reply: %+v", *reply)
 		} else {
 			INFO("Warning, reply is not match args: %+v", *reply)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(300 * time.Millisecond):
 		reply.StatusCode = ErrTimeout
 	}
 	kv.mu.Lock()
@@ -151,15 +151,14 @@ func (kv *ShardKV) getNotifyChan(index int) chan CommandReply {
 // handle command
 func (kv *ShardKV) handleCommand() {
 	for msg := range kv.applyCh {
-		cmd := msg.Command.(CommandArgs)
-		reply := CommandReply{
-			ClientId:   cmd.ClientId,
-			RequestId:  cmd.RequestId,
-			StatusCode: OK,
-			Value:      "",
-		}
-
 		if msg.CommandValid {
+			cmd := msg.Command.(CommandArgs)
+			reply := CommandReply{
+				ClientId:   cmd.ClientId,
+				RequestId:  cmd.RequestId,
+				StatusCode: OK,
+				Value:      "",
+			}
 			if !kv.isDuplicateRequest(cmd.ClientId, cmd.RequestId) || cmd.OpType == OpReConfig || cmd.OpType == OpGc {
 				switch cmd.OpType {
 				case OpPut:
@@ -177,19 +176,45 @@ func (kv *ShardKV) handleCommand() {
 			} else {
 				reply = kv.lastOpResult[cmd.ClientId]
 			}
-			kv.mu.RLock()
+			kv.mu.Lock()
 			ch := kv.getNotifyChan(msg.CommandIndex)
-			kv.mu.RUnlock()
+			kv.SaveSnapshot(msg.CommandIndex)
+			kv.mu.Unlock()
 			ch <- reply
-			if kv.maxRaftState != -1 && kv.maxRaftState < kv.rf.GetRaftStateSize() {
-				// TODO: Make snapshot
-				INFO("Make snapshot files")
-			}
+
 		} else if len(msg.Snapshot) > 0 {
-			INFO("Receive snapshot msg")
-			// TODO:
+			kv.mu.Lock()
+			kv.ReadFromSnapshot(msg.Snapshot)
+			kv.mu.Unlock()
 		}
 	}
+}
+
+func (kv *ShardKV) SaveSnapshot(index int) {
+	if kv.maxRaftState != -1 && kv.maxRaftState < kv.rf.GetRaftStateSize() {
+		INFO("Group:%d,db:%d maxRaftState: %d, get raft state size: %d", kv.gid, len(kv.db.data), kv.maxRaftState, kv.rf.GetRaftStateSize())
+		w := new(bytes.Buffer)
+		e := labgob.NewEncoder(w)
+		e.Encode(kv.lastOpResult)
+		e.Encode(kv.config)
+		e.Encode(kv.db.data)
+		go kv.rf.MakeRaftSnaphot(w.Bytes(), index)
+	}
+}
+
+func (kv *ShardKV) ReadFromSnapshot(snapshot []byte) {
+	r := bytes.NewReader(snapshot)
+	d := labgob.NewDecoder(r)
+	var last_log_index int // unused placeholder
+	var last_log_term int  // unused placeholder
+	d.Decode(&last_log_index)
+	d.Decode(&last_log_term)
+
+	d.Decode(&kv.lastOpResult)
+	d.Decode(&kv.config)
+	d.Decode(&kv.db.data)
+
+	INFO("Group:%d, read snapshot size: %d, data len: %d", kv.gid, len(snapshot), len(kv.db.data))
 }
 
 // 提取当前配置中本group持有的没有的shards，而新的配置要分给本group的shards
@@ -207,7 +232,6 @@ func (kv *ShardKV) extractMigrateShards(newConfig shardmaster.Config) map[int][]
 			shardsGroups[gid] = append(shardsGroups[gid], i)
 		}
 	}
-	INFO("Group:%d Shards Groups: %v", kv.gid, shardsGroups)
 	return shardsGroups
 }
 
@@ -237,7 +261,6 @@ func (kv *ShardKV) sendMigrateGroups(gid int, args *MigrateArgs, reply *MigrateR
 			return OK
 		}
 		if ok && reply.StatusCode == ErrNotReady {
-			INFO("Warning: args: %+v reply: %+v", *args, *reply)
 			return ErrNotReady
 		}
 	}
@@ -245,7 +268,6 @@ func (kv *ShardKV) sendMigrateGroups(gid int, args *MigrateArgs, reply *MigrateR
 }
 
 func (kv *ShardKV) forwardConfig(newConfig shardmaster.Config) (CommandArgs, bool) {
-	// TODO: send config and receive shard data
 	migrateShardsGroups := kv.extractMigrateShards(newConfig)
 
 	data := [shardmaster.NShards]map[string]string{}
@@ -283,12 +305,9 @@ func (kv *ShardKV) forwardConfig(newConfig shardmaster.Config) (CommandArgs, boo
 		}(gid, migrateArgs, &MigrateReply{})
 	}
 	wg.Wait()
-	INFO("Group:%d DATA: %+v ", kv.gid, data)
 	args := CommandArgs{
-		OpType: OpReConfig,
-		Config: newConfig,
-		// RequestId:    0,
-		// ClientId:     0,
+		OpType:       OpReConfig,
+		Config:       newConfig,
 		Data:         data,
 		ResultRecord: resultRecord,
 	}
@@ -322,11 +341,8 @@ func (kv *ShardKV) updateConfig(syncTime time.Duration) {
 			nextConfig := kv.mck.Query(kv.config.Num + 1)
 			// See hint 1
 			if nextConfig.Num == kv.config.Num+1 {
-				// TODO: send config and exchange data
 				if cmd, ok := kv.forwardConfig(nextConfig); ok {
-					// TODO: APPLY CONFIG AND DATA TO THIS GROUP
 					kv.applyCommand(cmd)
-					// INFO("GROUPS:%d, apply cmd:%+v, result: %t", kv.gid, cmd, ok)
 				}
 			}
 		}
@@ -335,7 +351,6 @@ func (kv *ShardKV) updateConfig(syncTime time.Duration) {
 }
 
 func (kv *ShardKV) applyReConfig(args CommandArgs) (string, Err) {
-	// TODO:
 	// 1.merge request record
 	for clientId, record := range args.ResultRecord {
 		if result, ok := kv.lastOpResult[clientId]; !ok || result.RequestId < record.RequestId {
@@ -350,6 +365,7 @@ func (kv *ShardKV) applyReConfig(args CommandArgs) (string, Err) {
 	// INFO("CONFIG: %+v", kv.config)
 	// 4.send GC RPC
 	// 已经应用了这些DATA，就再申请移除相关的数据
+	// TODO: To implement GC
 	kv.sendGarbageCollection(kv.gid, args.Data)
 	return "", OK
 }
@@ -394,12 +410,12 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	maxRaftState int, gid int, masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *ShardKV {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	// labgob.Register(Command{})
 	labgob.Register(CommandArgs{})
 	labgob.Register(CommandReply{})
 	labgob.Register(MigrateArgs{})
 	labgob.Register(MigrateReply{})
 	labgob.Register(shardmaster.Config{})
+	labgob.Register(StoreComponent{})
 	kv := &ShardKV{
 		mu:           sync.RWMutex{},
 		me:           me,
