@@ -18,6 +18,7 @@ const (
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrNoneLeader  = "ErrNoneLeader"
 	ErrTimeout     = "ErrTimeout"
+	ErrNotReady    = "ErrNotReady"
 )
 
 const (
@@ -47,22 +48,29 @@ type CommandArgs struct {
 
 	RequestId int
 	ClientId  int64
+
+	Data          [shardmaster.NShards]map[string]string
+	RequestRecord map[int64]int
+	ResultRecord  map[int64]CommandReply
 }
 
 type CommandReply struct {
+	ClientId   int64
+	RequestId  int
 	StatusCode Err
 	Value      string
 }
 
 type MigrateArgs struct {
 	Num    int
-	Shards int
+	Shards []int
 }
 
 type MigrateReply struct {
-	StatusCode   Err
-	Data         [shardmaster.NShards]map[string]string
-	RequstRecord map[int64]int
+	StatusCode    Err
+	Data          [shardmaster.NShards]map[string]string
+	RequstRecord  map[int64]int
+	RequestResult map[int64]CommandReply
 }
 
 type GcArgs struct {
@@ -78,3 +86,11 @@ var (
 	INFO = shardmaster.INFO
 	WARN = shardmaster.WARN
 )
+
+func DeepCopy(kv map[string]string) map[string]string {
+	dst := make(map[string]string)
+	for k, v := range kv {
+		dst[k] = v
+	}
+	return dst
+}
