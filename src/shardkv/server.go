@@ -77,13 +77,12 @@ type ShardKV struct {
 
 	chanNotify   map[int]chan CommandReply
 	lastOpResult map[int64]CommandReply
-	lastRequest  map[int64]int
 }
 
 func (kv *ShardKV) isDuplicateRequest(clientId int64, cmdId int) bool {
 	kv.mu.RLock()
 	defer kv.mu.RUnlock()
-	if id, ok := kv.lastRequest[clientId]; ok && id >= cmdId {
+	if result, ok := kv.lastOpResult[clientId]; ok && result.RequestId >= cmdId {
 		return true
 	}
 	return false
@@ -104,6 +103,7 @@ func (kv *ShardKV) HandleRequest(args *CommandArgs, reply *CommandReply) {
 		return
 	}
 	if !kv.checkKeyShard(cmd.Key) {
+		INFO("Group: %d shard:  %+v", kv.gid, kv.config.Shards)
 		reply.StatusCode = ErrWrongGroup
 		return
 	}
@@ -139,12 +139,10 @@ func (kv *ShardKV) getNotifyChan(index int) chan CommandReply {
 	if ch, ok := kv.chanNotify[index]; !ok {
 		kv.chanNotify[index] = make(chan CommandReply, 1)
 	} else {
-		for len(ch) > 0 {
-			select {
-			case <-ch:
-			default:
-				break
-			}
+		select {
+		case <-ch:
+		default:
+			break
 		}
 	}
 	return kv.chanNotify[index]
@@ -154,10 +152,15 @@ func (kv *ShardKV) getNotifyChan(index int) chan CommandReply {
 func (kv *ShardKV) handleCommand() {
 	for msg := range kv.applyCh {
 		cmd := msg.Command.(CommandArgs)
-		reply := CommandReply{}
+		reply := CommandReply{
+			ClientId:   cmd.ClientId,
+			RequestId:  cmd.RequestId,
+			StatusCode: OK,
+			Value:      "",
+		}
 
 		if msg.CommandValid {
-			if !kv.isDuplicateRequest(cmd.ClientId, cmd.RequestId) {
+			if !kv.isDuplicateRequest(cmd.ClientId, cmd.RequestId) || cmd.OpType == OpReConfig || cmd.OpType == OpGc {
 				switch cmd.OpType {
 				case OpPut:
 					reply.Value, reply.StatusCode = kv.db.UpdateDB(cmd.OpType, cmd.Key, cmd.Value)
@@ -170,7 +173,6 @@ func (kv *ShardKV) handleCommand() {
 				case OpGc:
 					reply.Value, reply.StatusCode = kv.applyGC(cmd)
 				}
-				kv.lastRequest[cmd.ClientId] = cmd.RequestId
 				kv.lastOpResult[cmd.ClientId] = reply
 			} else {
 				reply = kv.lastOpResult[cmd.ClientId]
@@ -190,52 +192,56 @@ func (kv *ShardKV) handleCommand() {
 	}
 }
 
-func (kv *ShardKV) equalConfig(cfg1 *shardmaster.Config, cfg2 *shardmaster.Config) bool {
-	if cfg1.Num == cfg2.Num && cfg1.Shards == cfg2.Shards {
-		return true
-	}
-	return false
-}
-
 // 提取当前配置中本group持有的没有的shards，而新的配置要分给本group的shards
 func (kv *ShardKV) extractMigrateShards(newConfig shardmaster.Config) map[int][]int {
 	shardsGroups := map[int][]int{}
 	for i := 0; i < shardmaster.NShards; i++ {
-		if newConfig.Shards[i] != kv.gid && kv.config.Shards[i] == kv.gid {
-			gid := newConfig.Shards[i]
-			if _, ok := shardsGroups[gid]; !ok && gid != 0 {
+		if newConfig.Shards[i] == kv.gid && kv.config.Shards[i] != kv.gid {
+			gid := kv.config.Shards[i]
+			if gid == 0 {
+				continue
+			}
+			if _, ok := shardsGroups[gid]; !ok {
 				shardsGroups[gid] = make([]int, 0)
 			}
 			shardsGroups[gid] = append(shardsGroups[gid], i)
 		}
 	}
+	INFO("Group:%d Shards Groups: %v", kv.gid, shardsGroups)
 	return shardsGroups
 }
 
 // Migrate data RPC
-func (kv *ShardKV) MigrateData(args *MigrateArgs, reply *MigrateReply) bool {
+func (kv *ShardKV) MigrateData(args *MigrateArgs, reply *MigrateReply) {
+	INFO("Group:%d Migrate data", kv.gid)
 	if args.Num > kv.config.Num {
 		reply.StatusCode = ErrNotReady
-		return false
+		return
 	}
-	for clientId, record := range kv.lastRequest {
-		reply.RequstRecord[clientId] = record
-	}
+	reply.RequestResult = make(map[int64]CommandReply, 1)
 	for clientId, result := range kv.lastOpResult {
 		reply.RequestResult[clientId] = result
 	}
 	reply.Data = kv.db.CopyFrom(args.Shards)
-	return true
+	reply.StatusCode = OK
+	INFO("Migrate data reply: %*+v", reply)
 }
 
 func (kv *ShardKV) sendMigrateGroups(gid int, args *MigrateArgs, reply *MigrateReply) Err {
+	INFO("Group: %d, gid: %d, config: %+v", kv.gid, gid, kv.config)
 	for _, server := range kv.config.Groups[gid] {
 		srv := kv.make_end(server)
-		if srv.Call("ShardKV.MigrateData", args, reply) {
-			return reply.StatusCode
+		ok := srv.Call("ShardKV.MigrateData", args, reply)
+		INFO("Ok: %t, args: %+v, reply:%+v", ok, args, reply)
+		if ok && reply.StatusCode == OK {
+			return OK
+		}
+		if ok && reply.StatusCode == ErrNotReady {
+			INFO("Warning: args: %+v reply: %+v", *args, *reply)
+			return ErrNotReady
 		}
 	}
-	return ErrNoneLeader
+	return OK
 }
 
 func (kv *ShardKV) forwardConfig(newConfig shardmaster.Config) (CommandArgs, bool) {
@@ -243,12 +249,11 @@ func (kv *ShardKV) forwardConfig(newConfig shardmaster.Config) (CommandArgs, boo
 	migrateShardsGroups := kv.extractMigrateShards(newConfig)
 
 	data := [shardmaster.NShards]map[string]string{}
-	requestRecord := map[int64]int{}
 	resultRecord := map[int64]CommandReply{}
 	for i := 0; i < shardmaster.NShards; i++ {
 		data[i] = make(map[string]string)
 	}
-
+	ok := true
 	var wg sync.WaitGroup
 	var mutex sync.Mutex
 	for gid, shards := range migrateShardsGroups {
@@ -259,30 +264,35 @@ func (kv *ShardKV) forwardConfig(newConfig shardmaster.Config) (CommandArgs, boo
 		wg.Add(1)
 		go func(gid int, args *MigrateArgs, reply *MigrateReply) {
 			defer wg.Done()
-			if statusCode := kv.sendMigrateGroups(gid, args, reply); statusCode == OK {
-				mutex.Lock()
-				for shard, kv := range reply.Data {
-					for k, v := range kv {
-						data[shard][k] = v
-					}
-					for clientId, record := range reply.RequstRecord {
-						requestRecord[clientId] = record
-						resultRecord[clientId] = reply.RequestResult[clientId]
-					}
-				}
-				mutex.Unlock()
+			reply.RequestResult = make(map[int64]CommandReply)
+			statusCode := kv.sendMigrateGroups(gid, args, reply)
+			if statusCode != OK {
+				ok = false
 			}
+			INFO("Group: %d, statusCode: %v, reply:%+v", kv.gid, statusCode, *reply)
+			mutex.Lock()
+			for shard, kv := range reply.Data {
+				for k, v := range kv {
+					data[shard][k] = v
+				}
+				for clientId, result := range reply.RequestResult {
+					resultRecord[clientId] = result
+				}
+			}
+			mutex.Unlock()
 		}(gid, migrateArgs, &MigrateReply{})
 	}
 	wg.Wait()
+	INFO("Group:%d DATA: %+v ", kv.gid, data)
 	args := CommandArgs{
-		OpType:        OpReConfig,
-		Data:          data,
-		RequestRecord: requestRecord,
-		ResultRecord:  resultRecord,
-		Config:        newConfig,
+		OpType: OpReConfig,
+		Config: newConfig,
+		// RequestId:    0,
+		// ClientId:     0,
+		Data:         data,
+		ResultRecord: resultRecord,
 	}
-	return args, true
+	return args, ok
 }
 
 func (kv *ShardKV) applyCommand(args CommandArgs) bool {
@@ -293,10 +303,7 @@ func (kv *ShardKV) applyCommand(args CommandArgs) bool {
 		return false
 	}
 	kv.mu.Lock()
-	if _, ok := kv.chanNotify[index]; !ok {
-		kv.chanNotify[index] = make(chan CommandReply, 1)
-	}
-	ch := kv.chanNotify[index]
+	ch := kv.getNotifyChan(index)
 	kv.mu.Unlock()
 	select {
 	case <-ch:
@@ -330,10 +337,9 @@ func (kv *ShardKV) updateConfig(syncTime time.Duration) {
 func (kv *ShardKV) applyReConfig(args CommandArgs) (string, Err) {
 	// TODO:
 	// 1.merge request record
-	for clientId, record := range args.RequestRecord {
-		if cmdId, ok := kv.lastRequest[clientId]; !ok || cmdId < record {
-			kv.lastRequest[clientId] = record
-			kv.lastOpResult[clientId] = args.ResultRecord[clientId]
+	for clientId, record := range args.ResultRecord {
+		if result, ok := kv.lastOpResult[clientId]; !ok || result.RequestId < record.RequestId {
+			kv.lastOpResult[clientId] = record
 		}
 	}
 	// 2.apply pulled  data
@@ -341,6 +347,7 @@ func (kv *ShardKV) applyReConfig(args CommandArgs) (string, Err) {
 	// 3.apply this config
 	// lastConfig := kv.config
 	kv.config = args.Config
+	// INFO("CONFIG: %+v", kv.config)
 	// 4.send GC RPC
 	// 已经应用了这些DATA，就再申请移除相关的数据
 	kv.sendGarbageCollection(kv.gid, args.Data)
@@ -392,8 +399,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	labgob.Register(CommandReply{})
 	labgob.Register(MigrateArgs{})
 	labgob.Register(MigrateReply{})
-	labgob.Register(GcArgs{})
-	labgob.Register(GcReply{})
+	labgob.Register(shardmaster.Config{})
 	kv := &ShardKV{
 		mu:           sync.RWMutex{},
 		me:           me,
@@ -407,7 +413,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 		db:           MakeStore(),
 		chanNotify:   map[int]chan CommandReply{},
 		lastOpResult: map[int64]CommandReply{},
-		lastRequest:  map[int64]int{},
 	}
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 

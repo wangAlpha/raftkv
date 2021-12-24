@@ -50,7 +50,6 @@ type CommandArgs struct {
 	ClientId  int64
 
 	Data          [shardmaster.NShards]map[string]string
-	RequestRecord map[int64]int
 	ResultRecord  map[int64]CommandReply
 }
 
