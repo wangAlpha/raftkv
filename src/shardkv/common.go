@@ -1,6 +1,10 @@
 package shardkv
 
-import "raftkv/src/shardmaster"
+import (
+	"log"
+	"os"
+	"raftkv/src/shardmaster"
+)
 
 //
 // Sharded key/value server.
@@ -46,16 +50,19 @@ type CommandArgs struct {
 	Value  string
 	Config shardmaster.Config
 
-	RequestId int
+	RequestId int64
 	ClientId  int64
 
-	Data          [shardmaster.NShards]map[string]string
-	ResultRecord  map[int64]CommandReply
+	Data         [shardmaster.NShards]map[string]string
+	ResultRecord map[int64]CommandReply
+
+	GcShards []int
+	GcNum    int
 }
 
 type CommandReply struct {
 	ClientId   int64
-	RequestId  int
+	RequestId  int64
 	StatusCode Err
 	Value      string
 }
@@ -72,18 +79,19 @@ type MigrateReply struct {
 	RequestResult map[int64]CommandReply
 }
 
-type GcArgs struct {
-	Num     int
-	ShardId int
+type GCArgs struct {
+	Num    int
+	Shards []int
 }
 
-type GcReply struct {
+type GCReply struct {
 	StatusCode Err
 }
 
 var (
-	INFO = shardmaster.INFO
-	WARN = shardmaster.WARN
+	LogFile = os.Stderr
+	INFO    = log.New(LogFile, "INFO ", log.Ltime|log.Lshortfile).Printf
+	WARN    = log.New(LogFile, "WARN ", log.Ltime|log.Lshortfile).Printf
 )
 
 func DeepCopy(kv map[string]string) map[string]string {
