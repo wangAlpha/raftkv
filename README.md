@@ -1,9 +1,17 @@
-# 6.824
-Mit 6.824 projects
+RaftKV is a simple Golang distributed consistent KV server based on 
+the raft protocol.
 
-  - [x] Lab1
-  - [x] Lab2
-  - [x] Lab3
-  - [x] Lab4
-    - [x] LabA
-    - [x] LabB
+http://github.com/wangAlpha/rafkv
+
+Requires:
+  Linux kernel version >= 2.6.28.
+  Golang >= 1.6 and Python >= 3.7.
+
+             __ _   _           
+            / _| | | |          
+  _ __ __ _| |_| |_| | ____   __
+ | '__/ _` |  _| __| |/ /\ \ / /
+ | | | (_| | | | |_|   <  \ V / 
+ |_|  \__,_|_|  \__|_|\_\  \_/  
+                                
+                             
