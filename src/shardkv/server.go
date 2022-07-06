@@ -2,70 +2,14 @@ package shardkv
 
 import (
 	"bytes"
+	"sync"
+	"time"
+
 	"raftkv/src/labgob"
 	"raftkv/src/labrpc"
 	"raftkv/src/raft"
 	"raftkv/src/shardmaster"
-	"sync"
-	"time"
 )
-
-type StoreComponent struct {
-	data [shardmaster.NShards]map[string]string
-}
-
-func MakeStore() *StoreComponent {
-	data := [shardmaster.NShards]map[string]string{}
-	for i := 0; i < shardmaster.NShards; i++ {
-		data[i] = make(map[string]string)
-	}
-	return &StoreComponent{
-		data: data,
-	}
-}
-
-func (db *StoreComponent) UpdateDB(op int, key string, value string) (string, Err) {
-	var status Err = OK
-	shard := key2shard(key)
-	switch op {
-	case OpGet:
-		if _, ok := db.data[shard][key]; !ok {
-			status = ErrNoKey
-		} else {
-			value = db.data[shard][key]
-		}
-	case OpPut:
-		db.data[shard][key] = value
-		value = db.data[shard][key]
-	case OpAppend:
-		db.data[shard][key] += value
-		value = db.data[shard][key]
-	}
-	return value, status
-}
-
-func (db *StoreComponent) UpdateFrom(data [shardmaster.NShards]map[string]string) {
-	for shard, kv := range data {
-		for k, v := range kv {
-			db.data[shard][k] = v
-		}
-	}
-}
-
-func (db *StoreComponent) CopyFrom(shards []int) [shardmaster.NShards]map[string]string {
-	data := [shardmaster.NShards]map[string]string{}
-	for i := 0; i < shardmaster.NShards; i++ {
-		data[i] = make(map[string]string)
-	}
-	for _, shard := range shards {
-		data[shard] = DeepCopy(db.data[shard])
-	}
-	return data
-}
-
-func (db *StoreComponent) DeleteShard(shard int) {
-	db.data[shard] = make(map[string]string)
-}
 
 type ShardKV struct {
 	mu           sync.RWMutex
@@ -100,8 +44,8 @@ func (kv *ShardKV) checkKeyShard(key string) bool {
 	return kv.config.Shards[key2shard(key)] == kv.gid
 }
 
-// Client command RPC handlerk
-func (kv *ShardKV) HandleRequest(args *CommandArgs, reply *CommandReply) {
+// Client command RPC handler
+func (kv *ShardKV) HandleRequestRPC(args *CommandArgs, reply *CommandReply) {
 	cmd := *args
 	if kv.isDuplicateRequest(cmd.ClientId, cmd.RequestId) {
 		kv.mu.RLock()
@@ -178,7 +122,7 @@ func (kv *ShardKV) handleCommand() {
 				case OpReConfig:
 					reply.Value, reply.StatusCode = kv.applyReConfig(cmd)
 				case OpGc:
-					// reply.Value, reply.StatusCode = kv.applyGC(cmd)
+					reply.Value, reply.StatusCode = kv.applyGC(cmd)
 				}
 				kv.mu.Lock()
 				kv.lastOpResult[cmd.ClientId] = reply
@@ -230,7 +174,7 @@ func (kv *ShardKV) ReadFromSnapshot(snapshot []byte) {
 }
 
 // 提取当前配置中本group持有的没有的shards，而新的配置要分给本group的shards
-func (kv *ShardKV) extractMigrateShards(newConfig shardmaster.Config) map[int][]int {
+func (kv *ShardKV) buildMigrateShards(newConfig shardmaster.Config) map[int][]int {
 	shardsGroups := map[int][]int{}
 	for i := 0; i < shardmaster.NShards; i++ {
 		if newConfig.Shards[i] == kv.gid && kv.config.Shards[i] != kv.gid {
@@ -248,7 +192,7 @@ func (kv *ShardKV) extractMigrateShards(newConfig shardmaster.Config) map[int][]
 }
 
 // Migrate data RPC
-func (kv *ShardKV) MigrateData(args *MigrateArgs, reply *MigrateReply) {
+func (kv *ShardKV) MigrateDataRPC(args *MigrateArgs, reply *MigrateReply) {
 	INFO("Group:%d Migrate data", kv.gid)
 	kv.mu.RLock()
 	defer kv.mu.RUnlock()
@@ -269,7 +213,7 @@ func (kv *ShardKV) sendMigrateGroups(gid int, args *MigrateArgs, reply *MigrateR
 	INFO("Group: %d, gid: %d, config: %+v", kv.gid, gid, kv.config)
 	for _, server := range kv.config.Groups[gid] {
 		srv := kv.make_end(server)
-		ok := srv.Call("ShardKV.MigrateData", args, reply)
+		ok := srv.Call("ShardKV.MigrateDataRPC", args, reply)
 		INFO("Ok: %t, args: %+v, reply:%+v", ok, args, reply)
 		if ok && reply.StatusCode == OK {
 			return OK
@@ -283,7 +227,7 @@ func (kv *ShardKV) sendMigrateGroups(gid int, args *MigrateArgs, reply *MigrateR
 
 func (kv *ShardKV) forwardConfig(newConfig shardmaster.Config) (CommandArgs, bool) {
 	kv.mu.RLock()
-	migrateShardsGroups := kv.extractMigrateShards(newConfig)
+	migrateShardsGroups := kv.buildMigrateShards(newConfig)
 	kv.mu.RUnlock()
 
 	data := [shardmaster.NShards]map[string]string{}
@@ -371,24 +315,21 @@ func (kv *ShardKV) updateConfig(syncTime time.Duration) {
 }
 
 func (kv *ShardKV) applyReConfig(args CommandArgs) (string, Err) {
-	// 1.merge request record
-	// if args.Config.Num
-	for clientId, record := range args.ResultRecord {
-		if result, ok := kv.lastOpResult[clientId]; !ok || result.RequestId < record.RequestId {
-			kv.lastOpResult[clientId] = record
+	if args.Config.Num >= kv.config.Num {
+		for clientId, record := range args.ResultRecord {
+			if result, ok := kv.lastOpResult[clientId]; !ok || result.RequestId < record.RequestId {
+				kv.lastOpResult[clientId] = record
+			}
 		}
+		kv.db.UpdateFrom(args.Data)
+		lastConfig := kv.config
+		kv.config = args.Config
+		kv.sendGarbageCollection(&lastConfig, args.Data)
 	}
-	// 2.apply pulled  data
-	kv.db.UpdateFrom(args.Data)
-	// 3.apply this config
-	lastConfig := kv.config
-	kv.config = args.Config
-	// 4.send GC RPC
-	kv.sendGarbageCollection(&lastConfig, args.Data)
 	return "", OK
 }
 
-func (kv *ShardKV) GarbageCollection(args *GCArgs, reply *GCReply) {
+func (kv *ShardKV) GarbageCollectRPC(args *GCArgs, reply *GCReply) {
 	cmd := CommandArgs{
 		OpType:   OpGc,
 		GcShards: args.Shards,
@@ -440,7 +381,7 @@ func (kv *ShardKV) sendGarbageCollection(lastConfig *shardmaster.Config, data [s
 		go func(gid int, args *GCArgs) {
 			for _, server := range lastConfig.Groups[gid] {
 				srv := kv.make_end(server)
-				if ok := srv.Call("ShardKV.GarbageCollection", args, &GCReply{}); ok {
+				if ok := srv.Call("ShardKV.GarbageCollectRPC", args, &GCReply{}); ok {
 					INFO("Group:%d send GC command Groups: %d, args: %+v, currentConfig: %+v", kv.gid, gid, *args, kv.config)
 					break
 				}
@@ -450,10 +391,10 @@ func (kv *ShardKV) sendGarbageCollection(lastConfig *shardmaster.Config, data [s
 }
 
 func (kv *ShardKV) applyGC(cmd CommandArgs) (string, Err) {
-	// kv.mu.Lock()
-	// defer kv.mu.Unlock()
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 	INFO("Group: %d, applyGc cmd: %+v %+v", kv.gid, cmd, kv.db.data)
-	if cmd.GcNum <= kv.config.Num {
+	if cmd.GcNum >= kv.config.Num {
 		for shard := range cmd.GcShards {
 			if gid := cmd.GcShards[shard]; gid != kv.gid {
 				kv.db.DeleteShard(shard)
@@ -493,7 +434,8 @@ func (kv *ShardKV) applyGC(cmd CommandArgs) (string, Err) {
 // for any long-running work.
 //
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
-	maxRaftState int, gid int, masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *ShardKV {
+	maxRaftState int, gid int, masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd,
+) *ShardKV {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(CommandArgs{})

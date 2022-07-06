@@ -11,9 +11,10 @@ package shardkv
 import (
 	"crypto/rand"
 	"math/big"
+	"time"
+
 	"raftkv/src/labrpc"
 	"raftkv/src/shardmaster"
-	"time"
 )
 
 //
@@ -42,7 +43,7 @@ type Clerk struct {
 	Config      shardmaster.Config
 	MakeEnd     func(string) *labrpc.ClientEnd
 	LeaderId    map[int]int
-	RequestId   int
+	RequestId   int64
 	ClientId    int64
 }
 
@@ -93,7 +94,7 @@ func (ck *Clerk) RequestOp(args *CommandArgs) string {
 			for {
 				srv := ck.MakeEnd(servers[leaderId])
 				var reply CommandReply
-				ok := srv.Call("ShardKV.HandleRequest", args, &reply)
+				ok := srv.Call("ShardKV.HandleRequestRPC", args, &reply)
 				INFO("Op: %v Id: %d ok: %t, reply: %+v ", OpName[args.OpType], args.RequestId, ok, reply)
 				if ok && (reply.StatusCode == OK || reply.StatusCode == ErrNoKey) {
 					ck.LeaderId[gid] = leaderId
