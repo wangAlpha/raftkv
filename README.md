@@ -49,9 +49,9 @@ Requires:
  - Snapshot 如何管理（限制Snapshot，避免带宽、CPU、IO资源被过度占用）。
 
 ## Reference
-[raft 在线动画演示](http://www.kailing.pub/raft/index.html)
-[raft 中英文论文](https://github.com/maemual/raft-zh_cn)
-[raft 作者博士论文](https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf)
-[Raft 的优化](https://pingcap.com/zh/blog/optimizing-raft-in-tikv)
-[Raft 的应用与优化](https://codeantenna.com/a/skgtzCiILK)
-[Multi-Raft在TiKV中的实践](https://blog.51cto.com/u_15703183/5449815)
+ 1. [raft 在线动画演示](http://www.kailing.pub/raft/index.html)
+ 2. [raft 中英文论文](https://github.com/maemual/raft-zh_cn)
+ 3. [raft 作者博士论文](https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf)
+ 4. [Raft 的优化](https://pingcap.com/zh/blog/optimizing-raft-in-tikv)
+ 5. [Raft 的应用与优化](https://codeantenna.com/a/skgtzCiILK)
+ 6. [Multi-Raft在TiKV中的实践](https://blog.51cto.com/u_15703183/5449815)
