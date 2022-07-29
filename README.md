@@ -1,19 +1,9 @@
-RaftKV is a simple Golang distributed consistent KV server based on
-the raft protocol.
-
-http://github.com/wangAlpha/rafkv
-
-Requires:
-  Linux kernel version >= 2.6.28
-  Golang >= 1.6 and Python >= 3.7
-
-
 ![image](https://user-images.githubusercontent.com/14357954/175243606-bb1de833-3a00-41eb-9bba-22038f612390.png)
 
 ### 简介
 一个 Go 实现的内存版分布式 KV 服务器。
 
-## 项目概述
+## 原理概述
 ### Raft
   分布式下的容灾一般采用多副本节点的数据复制技术，可以达到分布式容灾，提高服务的可用性，降低单点节点故障等等。
   不过由于 CAP 理论，多节点带来了一致性问题。
