@@ -1,47 +1,46 @@
 ![image](https://user-images.githubusercontent.com/14357954/175243606-bb1de833-3a00-41eb-9bba-22038f612390.png)
 
 ### 简介
-一个 Go 实现的内存版分布式 KV 服务器。
+一个 Go 实现的内存版分布式一致性 KV 服务器。
 
 ## 原理概述
 ### Raft
-  分布式下的容灾一般采用多副本节点的数据复制技术，可以达到分布式容灾，提高服务的可用性，降低单点节点故障等等。
-  不过由于 CAP 理论，多节点带来了一致性问题。
+  假设我们的系统有一个常用的 KV server，但是考虑到网络的不可靠性和大量机器在一起时的故障率，一般的 KV server 无法保证可靠的容灾。
+  这时我们的一个方法是多副本节点容灾，但是又因为 `CAP` 理论的限制，这里存在一个一致性的问题。`Raft` 理论解决了这个一致性问题。
 
-  Raft 是一个强领导的基于状态机的集权一致性算法，此部分对外提供功能保证：外部追加的 `Log Entry`
-  一旦 success 成功，便会成为该集群共识。一个总机器 Quorum 数量的集群，至多可容纳 Quorum/2 的节点掉线；
-  在网络不稳定的情况下仍然利用各种内部传输的机制，对外提供可靠服务；可以进行持久化，以对抗机器的重启。
+  Raft 是一个基于状态机的强领导的一致性算法，它将所有请求视为 `Log Entry`
+  一旦一个集群 `Log Entry` 成功，该 `Log Entry` 便会成为集群共识，保证对外提供可靠服务。
 #### Raft 层实现
   本部分代码主要位于 `src/raft` 目录，其一个 `Raft Group` 的基本流程可见图一
- - 实现 `RequestVote RPC` ，从而实现初始选举、网络掉线之后的选举、以及心跳机制。该lab使得Leader得以尽快选举，并确保每一个term只能有至多一个leader.
- - 实现 `AppendEntries RPC`，使得leader可以不断地尝试各个follower追加log，并尽力最终使得这些log成为共识。一旦某log被过半数的raft所追加，那么这个log就会成为已提交的（commited）；leader会在心跳中向follower表明这一点，并使得网络状态正常的follower得知。raft会针对其自身的已提交log，向与其绑定的server发送apply message.
- - 实现持久化机制，并进行论文 Figure8 逻辑检验（该检验要求raft始终选出正确的leader，即使经历网络掉线、重启等，raft也能就 `Commited log` 实现共识，切不向server提交不成为共识的任何日志节点），churn检验（该检验要求raft能够尽快地从重启中恢复并向外提供服务）等。
- - 实现 Raft 的 `Snapshot` 机制，该机制允许raft在日志过长时，将前面的若干个log整合为一张快照。这要求改写日志的序列号逻辑。由于leader前面的日志丢失，所以可能会出现新follower无法追加前面的log的情况。在这种情况下，leader可以对follower发送 `InstallSnapshotRPC`。
+ - `Raft` 使用了 `Leader` 处理所有请求，如何选取出合适的 `Leader`，可见 `RequestVote RPC`；
+ - `Client` 的请求会被 `Leader` 分发给其他的节点，如何进行分发和同步可见`AppendEntries RPC`;
+ - 这些 `Log Entry` 需要进行持久化，以保证服务重启也可以使用，这个需要在服务发生状态变更的时候进行 `doPersit`；
+ - 当长时间服务的时候，`Log Entry` 会增长到难以忍受的地步，这就需要实现 `SnapShot` 机制，让数据自动移除不必要的部分。
 
 ![图1](imgs/raft-group.png)
 
 ### RaftKV
  本部分代码主要位于 `src/kvraft` 目录
  - Raft 层已经实现了可靠的 `Raft` 集群功能，本部分将抽离出 `DB` 类，结合 `Raft` 层实现一个 DB `Raft-Group`;
- - 由于网络的不可靠，出现乱序、超时和正在选举的情况下， server 可能会收到两次相同的历史请求。这就需要实现 `linearizable semantics`，这里采用客户端序列号+客户端指令序列号+server保存临时表机制，使得每台client发出的请求序列均满足线性一致性;
- - 当 Server 长期运行时，各个节点的 `Raft Log` 可能会增长得非常大，会耗费过大的存储资源，故节点应该在特定的时候（当 `Raft Log` 达到一定的数量时候）将当前状态存储至 `Snapshot` 中，然后丢弃掉快照前的所有 `Raft Log`。当一个节点重启时，应该先重装快照并读取和重现快照后的 `Raft Log`。
+ - 由于网络的不可靠，出现乱序、超时和正在选举的情况下， server 可能会收到两次相同的历史请求。这就需要实现 `linearizable semantics`，使得每台client发出的请求序列均满足线性一致性;
+ - 当 Server 长期运行时，各个节点的 `Raft Log` 可能会增长得非常大，会耗费过大的存储资源，故节点应该在特定的时候，进行 `InstallSnapshot`。
 
 ### Multi-Raft
  本部分代码主要位于 `src/shardmaster` 和 `src/shardkv`
-#### 需要解决的问题
-单个 Raft-Group 在 KV 的场景下存在一些弊端:
+ 单个 `Raft-Group` 在服务请求逐步增大时，会面临如下问题：
  - 单机的存储容量限制了系统的存储容量；
  - 请求量进一步提升时，单机无法处理这些请求（读写请求都由Leader节点处理）。
 #### Multi-Raft 原理:
-  简单来说，Multi-Raft 是在整个系统中，把所管理的数据按照一定的方式切片，每一个切片的数据都有自己的副本，这些副本之间的数据使用 Raft 来保证数据的一致性，在全局来看整个系统中同时存在多个 Raft-Group，就像这个样子：
+  <!-- `Multi-Raft` 解决了以上问题。 -->
+  为了容纳逐步增大的服务请求，`Multi-Raft` 创建了若干个 `Raft-Group` 将整个系统请求均匀分摊到这些 `Raft-Group` 中。
+  而为了管理这些 `Raft-Group`，`Multi-Raft`又引入了 `SharedMaster` 集群来专门进行管理，他们的关系如下图:
  ![multi-raft](imgs/multi-raft.png)
 #### MultiRaft 需要解决的一些核心问题：
- - 数据何如分片。
- - 分片中的数据越来越大，需要分裂产生更多的分片，组成更多 Raft-Group。
- - 分片的调度，让负载在系统中更平均（分片副本的迁移，补全，Leader 切换等等）。
- - 一个节点上，所有的 Raft-Group 复用链接（否则 Raft 副本之间两两建链，链接爆炸了）。
+ - 请求如何分片；
+ - 分片的调度，让负载在系统中更平均（分片副本的迁移，补全，Leader 切换等等）；
+ - 分片中的数据越来越大，需要分裂产生更多的分片，如何使该系统保证具有可伸缩性；
+ - 系统添加或者移除 `Raft-Group` 时，如何进行在线数据迁移；
  - 如何处理 stale 的请求（例如 Proposal 和 Apply 的时候，当前的副本不是 Leader、分裂了、被销毁了等等）。
- - Snapshot 如何管理（限制Snapshot，避免带宽、CPU、IO资源被过度占用）。
 
 ## Reference
  1. [raft 在线动画演示](http://www.kailing.pub/raft/index.html)
