@@ -24,14 +24,14 @@
  - Raft 层已经实现了可靠的 `Raft` 集群功能，本部分将抽离出 `DB` 类，结合 `Raft` 层实现一个 DB `Raft-Group`;
  - 由于网络的不可靠，出现乱序、超时和正在选举的情况下， server 可能会收到两次相同的历史请求。这就需要实现 `linearizable semantics`，使得每台client发出的请求序列均满足线性一致性;
  - 当 Server 长期运行时，各个节点的 `Raft Log` 可能会增长得非常大，会耗费过大的存储资源，故节点应该在特定的时候，进行 `InstallSnapshot`。
-
+ ![linearizable semantics](imgs/linerarizable.png)
 ### Multi-Raft
  本部分代码主要位于 `src/shardmaster` 和 `src/shardkv`
  单个 `Raft-Group` 在服务请求逐步增大时，会面临如下问题：
  - 单机的存储容量限制了系统的存储容量；
  - 请求量进一步提升时，单机无法处理这些请求（读写请求都由Leader节点处理）。
 #### Multi-Raft 原理:
-  <!-- `Multi-Raft` 解决了以上问题。 -->
+  `Multi-Raft` 解决了以上问题。
   为了容纳逐步增大的服务请求，`Multi-Raft` 创建了若干个 `Raft-Group` 将整个系统请求均匀分摊到这些 `Raft-Group` 中。
   而为了管理这些 `Raft-Group`，`Multi-Raft`又引入了 `SharedMaster` 集群来专门进行管理，他们的关系如下图:
  ![multi-raft](imgs/multi-raft.png)
