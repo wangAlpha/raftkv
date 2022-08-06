@@ -1,6 +1,6 @@
 ![image](https://user-images.githubusercontent.com/14357954/175243606-bb1de833-3a00-41eb-9bba-22038f612390.png)
 
-### 简介
+## 简介
 一个 Go 实现的内存版分布式一致性 KV 服务器。
 
 ## 原理概述
